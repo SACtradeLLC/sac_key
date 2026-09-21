@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <meta name="robots" content="noindex">
-<title>Kagi</title>
+<title>sac_key</title>
 <style>
   :root{
     --bg:#f4f4f2; --card:#ffffff; --ink:#1d1d1b; --sub:#6b6b66; --line:#e2e2de;
@@ -82,7 +82,7 @@
 <script>
 'use strict';
 /* =========================================================
-   Kagi — 1ファイルで動く、家族2人用のパスワード・口座管理
+   sac_key — 1ファイルで動く、家族2人用のパスワード・口座管理
    ・データはこのブラウザの中（localStorage）に AES-GCM で暗号化して保存
    ・鍵はマスターパスワードから PBKDF2 で作る。平文はどこにも書かない
    ・共有は「書き出し（暗号化ファイル）→ 相手が読み込み」で行う
@@ -160,7 +160,8 @@ function loadBlob() { try { const s = localStorage.getItem(STORE_KEY); return s 
 function saveBlobRaw(blob) { localStorage.setItem(STORE_KEY, JSON.stringify(blob)); }
 
 /* ---------- 状態 ---------- */
-const S = { key: null, salt: null, iter: PBKDF2_ITER, items: [], view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
+const MASK_KEY = 'sackey.mask';
+const S = { mask: (() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch (e) { return false; } })(), key: null, salt: null, iter: PBKDF2_ITER, items: [], view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
 
 async function persist() {
   const blob = await encryptItems(S.key, S.salt, S.iter, S.items);
@@ -194,7 +195,7 @@ function render() {
 function renderSetup() {
   app.innerHTML = `
   <div class="card center">
-    <h1>Kagi</h1>
+    <h1>sac_key</h1>
     <p class="hint">はじめに、ふたりで共有する「マスターパスワード」を決めます。<br>
     これ1つで全部の鍵が開きます。忘れると誰にも開けられないので、紙にも控えてください。</p>
     <label>マスターパスワード（12文字以上をおすすめ）</label>
@@ -204,9 +205,9 @@ function renderSetup() {
     <div class="err" id="err"></div>
     <button class="primary block" id="go">この合言葉で金庫を作る</button>
     <div class="sep"></div>
-    <p class="hint">すでに書き出したファイル（.kagi）がある人は、こちらから復元できます。</p>
+    <p class="hint">すでに書き出したファイル（.sackey）がある人は、こちらから復元できます。</p>
     <button class="block" id="restore">ファイルから復元する</button>
-    <input type="file" id="restoreFile" accept=".kagi,.json,application/json" hidden>
+    <input type="file" id="restoreFile" accept=".sackey,.kagi,.kinko,.json,application/json" hidden>
   </div>`;
   $('#go').onclick = async () => {
     const a = $('#pw1').value, b = $('#pw2').value;
@@ -233,7 +234,7 @@ function renderSetup() {
 function renderUnlock() {
   app.innerHTML = `
   <div class="card center">
-    <h1>Kagi</h1>
+    <h1>sac_key</h1>
     <label>マスターパスワード</label>
     <input type="password" id="pw" autocomplete="current-password">
     <div class="err" id="err"></div>
@@ -275,6 +276,8 @@ function wireNav(root = app) {
 function summaryOf(it) {
   const f = it.fields.find(x => !x.secret && x.value); return f ? f.value : '';
 }
+const ID_RE = /^(id|ＩＤ|ユーザー|user|ログインid|メール|mail|アカウント)/i, PW_RE = /パスワード|password|^pw$|^ＰＷ$|^pass/i;
+const findField = (it, re) => it.fields.find(f => re.test((f.label || '').trim()) && f.value);
 function renderList() {
   const q = S.q.trim().toLowerCase();
   const items = S.items
@@ -282,7 +285,7 @@ function renderList() {
     .filter(it => !q || (it.title + ' ' + it.memo + ' ' + it.fields.filter(f => !f.secret).map(f => f.value).join(' ')).toLowerCase().includes(q))
     .sort((a, b) => a.title.localeCompare(b.title, 'ja'));
   app.innerHTML = `
-  ${topBar('Kagi')}
+  ${topBar('sac_key')}
   <div class="row" style="margin-bottom:10px">
     <input type="search" id="q" placeholder="検索（名前・ID・メモ）" value="${esc(S.q)}">
     <button class="primary" id="add">＋ 追加</button>
@@ -291,7 +294,9 @@ function renderList() {
   <div class="list">
     ${items.length ? items.map(it => `
       <div class="item" data-id="${it.id}">
-        <div style="min-width:0"><div class="t">${esc(it.title || '（無題）')}</div><div class="s">${esc(summaryOf(it))}</div></div>
+        <div style="min-width:0;flex:1"><div class="t">${esc(it.title || '（無題）')}</div><div class="s">${esc(summaryOf(it))}</div></div>
+        ${findField(it, ID_RE) ? `<button class="small" data-qc="id" data-id="${it.id}">ID</button>` : ''}
+        ${findField(it, PW_RE) ? `<button class="small" data-qc="pw" data-id="${it.id}">PW</button>` : ''}
         <div class="c">${esc(it.category)}</div>
       </div>`).join('') : `<div class="empty">${S.items.length ? '見つかりません' : 'まだ何もありません。「＋ 追加」か、設定の「CSV から取り込む」から始めてください'}</div>`}
   </div>`;
@@ -300,6 +305,11 @@ function renderList() {
   $('#add').onclick = () => { S.editId = null; S.view = 'edit'; render(); };
   $$('[data-cat]').forEach(b => b.onclick = () => { S.cat = b.dataset.cat; render(); });
   $$('.item').forEach(el => el.onclick = () => { S.detailId = el.dataset.id; S.shown.clear(); S.view = 'detail'; render(); });
+  $$('[data-qc]').forEach(b => b.onclick = e => {
+    e.stopPropagation();
+    const it = S.items.find(x => x.id === b.dataset.id); const f = findField(it, b.dataset.qc === 'id' ? ID_RE : PW_RE);
+    if (f) copyText(f.value);
+  });
 }
 
 /* 詳細 */
@@ -314,11 +324,11 @@ function renderDetail() {
       <div class="field">
         <div class="l">${esc(f.label)}</div>
         <div class="vrow">
-          <div class="v ${f.secret && !S.shown.has(i) ? 'masked' : ''}" data-i="${i}">${
-            f.secret && !S.shown.has(i) ? '••••••••' :
+          <div class="v ${f.secret && S.mask && !S.shown.has(i) ? 'masked' : ''}" data-i="${i}">${
+            f.secret && S.mask && !S.shown.has(i) ? '••••••••' :
             (/^https?:\/\//i.test(f.value) ? `<a href="${esc(f.value)}" target="_blank" rel="noopener">${esc(f.value)}</a>` : esc(f.value))
           }</div>
-          ${f.secret ? `<button class="small" data-show="${i}">${S.shown.has(i) ? '隠す' : '表示'}</button>` : ''}
+          ${f.secret && S.mask ? `<button class="small" data-show="${i}">${S.shown.has(i) ? '隠す' : '表示'}</button>` : ''}
           <button class="small" data-copy="${i}">コピー</button>
         </div>
       </div>`).join('')}
@@ -359,19 +369,19 @@ function renderEdit() {
       <datalist id="catList">${allCats().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
       <label>名前（例：三井住友銀行、楽天カード、Amazon）</label>
       <input type="text" id="title" value="${esc(draft.title)}" autocomplete="off">
-      <label>項目　　<span class="hint">「秘密」にチェックすると隠して表示されます</span></label>
+      <label>項目　　<span class="hint">「秘密」は、設定で「隠す」をオンにしたときだけ ●●● になります</span></label>
       <div id="fields">
         ${draft.fields.map((f, i) => `
         <div class="frow" data-i="${i}">
           <input type="text" class="fl" placeholder="項目名" value="${esc(f.label)}" autocomplete="off">
-          <input type="text" class="fv" placeholder="値" value="${esc(f.value)}" autocomplete="off" ${f.secret ? 'style="-webkit-text-security:disc"' : ''}>
+          <input type="text" class="fv" placeholder="値" value="${esc(f.value)}" autocomplete="off" ${f.secret && S.mask ? 'style="-webkit-text-security:disc"' : ''}>
           <label class="chk"><input type="checkbox" class="fs" ${f.secret ? 'checked' : ''}>秘密</label>
           <button class="small fx" title="この項目を消す">×</button>
         </div>`).join('')}
       </div>
       <div class="row" style="margin-top:6px">
         <button class="small" id="addField">＋ 項目を足す</button>
-        <button class="small" id="genPw">パスワードを自動生成してコピー</button>
+        <button class="small" id="genPw">パスワードを自動で作って入れる</button>
       </div>
       <label>メモ</label>
       <textarea id="memo">${esc(draft.memo)}</textarea>
@@ -391,7 +401,12 @@ function renderEdit() {
     $$('.fs').forEach(c => c.onchange = () => { sync(); draw(); });
     $$('.fx').forEach(b => b.onclick = () => { sync(); draft.fields.splice(+b.closest('.frow').dataset.i, 1); draw(); });
     $('#addField').onclick = () => { sync(); draft.fields.push({ label: '', value: '', secret: false }); draw(); $$('.fl').pop().focus(); };
-    $('#genPw').onclick = () => { const p = genPassword(); copyText(p); toast('新しいパスワードをコピーしました。値の欄に貼り付けてください'); };
+    $('#genPw').onclick = () => {
+      const p = genPassword();
+      const row = $$('.frow').find(r => PW_RE.test($('.fl', r).value.trim()) && !$('.fv', r).value.trim());
+      if (row) { $('.fv', row).value = p; copyText(p); toast('パスワード欄に入れて、コピーもしました'); }
+      else { copyText(p); toast('空のパスワード欄がないのでコピーだけしました。値の欄に貼り付けてください'); }
+    };
     $('#save').onclick = async () => {
       sync();
       if (!draft.title.trim()) return $('#err').textContent = '名前を入れてください';
@@ -416,16 +431,26 @@ function renderSettings() {
     <h2>ふたりで共有する</h2>
     <p class="hint">この金庫はこのブラウザの中にだけあります。相手にも同じ中身を渡すには、暗号化したファイルを書き出して送り、相手が読み込みます。ファイルは合言葉がないと開けないので、AirDrop や iCloud Drive で渡して大丈夫です。</p>
     <div class="row">
-      <button id="export">書き出す（.kagi）</button>
+      <button id="export">書き出す（.sackey）</button>
       <button id="import">読み込む</button>
     </div>
-    <input type="file" id="importFile" accept=".kagi,.json,application/json" hidden>
+    <input type="file" id="importFile" accept=".sackey,.kagi,.kinko,.json,application/json" hidden>
     <label class="chk" style="margin-top:10px"><input type="checkbox" id="replace"> 読み込むとき、今の中身を全部置き換える（ふだんはチェック不要。新しい方だけ取り込みます）</label>
   </div>
   <div class="card">
     <h2>スプレッドシートから取り込む</h2>
     <p class="hint">Google スプレッドシートで <span class="kbd">ファイル → ダウンロード → カンマ区切り形式（.csv）</span> と進み、そのファイルを選びます。シートが複数ある場合は、シートごとに1回ずつ。</p>
     <button class="block" style="margin-top:8px" data-nav="csv">CSV から取り込む</button>
+  </div>
+  <div class="card">
+    <h2>サイトで自動入力する（Safari のパスワードに渡す）</h2>
+    <p class="hint">ログイン画面でパスワードを自動で入れるのは、Safari や iPhone に入っている「パスワード」機能の仕事です。sac_key から、その機能が読める形（CSV）で書き出せます。ID とパスワードの両方がある項目だけが対象です。<br>
+    書き出したら Mac の「パスワード」アプリ → ファイル → パスワードを読み込む で選んでください。読み込んだら、その CSV はゴミ箱へ。</p>
+    <button class="block" style="margin-top:8px" id="exportSafari">Safari 用 CSV を書き出す</button>
+  </div>
+  <div class="card">
+    <h2>表示</h2>
+    <label class="chk"><input type="checkbox" id="maskChk" ${S.mask ? 'checked' : ''}> 秘密の項目を ●●● で隠す（「表示」ボタンで見る）</label>
   </div>
   <div class="card">
     <h2>合言葉を変える</h2>
@@ -447,9 +472,26 @@ function renderSettings() {
   $('#export').onclick = async () => {
     await persist();
     const blob = new Blob([localStorage.getItem(STORE_KEY)], { type: 'application/json' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Kagi_${today()}.kagi`; a.click();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `sac_key_${today()}.sackey`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     toast('書き出しました');
+  };
+  $('#maskChk').onchange = e => { S.mask = e.target.checked; try { localStorage.setItem(MASK_KEY, S.mask ? '1' : '0'); } catch (err) {} toast(S.mask ? '隠します' : 'そのまま表示します'); };
+  $('#exportSafari').onclick = () => {
+    const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+    const rows = [['Title', 'URL', 'Username', 'Password', 'Notes', 'OTPAuth']];
+    for (const it of S.items) {
+      const id = findField(it, ID_RE), pw = findField(it, PW_RE);
+      if (!id || !pw) continue;
+      const urlF = it.fields.find(f => /^https?:\/\//i.test(f.value)) || { value: '' };
+      const notes = [it.category, ...it.fields.filter(f => f !== id && f !== pw && f !== urlF && f.value).map(f => `${f.label}: ${f.value}`), it.memo].filter(Boolean).join(' / ');
+      rows.push([it.title, urlF.value, id.value, pw.value, notes, '']);
+    }
+    if (rows.length < 2) return toast('ID とパスワードが両方ある項目がありません');
+    const blob = new Blob(['\uFEFF' + rows.map(r => r.map(q).join(',')).join('\r\n')], { type: 'text/csv' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `sac_key_safari_${today()}.csv`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast(`${rows.length - 1}件を書き出しました。読み込んだら CSV は消してください`);
   };
   $('#import').onclick = () => $('#importFile').click();
   $('#importFile').onchange = async e => {
@@ -649,7 +691,7 @@ function renderCsv() {
 
 /* ---------- 起動 ---------- */
 if (!window.isSecureContext || !crypto.subtle) {
-  app.innerHTML = `<div class="card center"><h1>Kagi</h1><p class="hint">このブラウザでは暗号化機能が使えません。Safari か Chrome でファイルを直接開いてください。</p></div>`;
+  app.innerHTML = `<div class="card center"><h1>sac_key</h1><p class="hint">このブラウザでは暗号化機能が使えません。Safari か Chrome でファイルを直接開いてください。</p></div>`;
 } else {
   render();
 }
