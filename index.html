@@ -1,0 +1,566 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+<meta name="robots" content="noindex">
+<title>家の金庫</title>
+<style>
+  :root{
+    --bg:#f4f4f2; --card:#ffffff; --ink:#1d1d1b; --sub:#6b6b66; --line:#e2e2de;
+    --accent:#1f6f5f; --accent-ink:#ffffff; --danger:#b3261e; --chip:#ecece8; --mask:#a7a7a2;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#161616; --card:#222222; --ink:#f0f0ec; --sub:#a4a49e; --line:#3a3a36;
+      --accent:#5fbfa8; --accent-ink:#0f1f1b; --danger:#ff8a80; --chip:#2e2e2b; --mask:#6a6a66;
+    }
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;font-size:16px;line-height:1.55;-webkit-text-size-adjust:100%}
+  #app{max-width:720px;margin:0 auto;padding:16px;min-height:100vh}
+  h1{font-size:20px;margin:0}
+  h2{font-size:17px;margin:0 0 12px}
+  .top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px}
+  .top .actions{display:flex;gap:6px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
+  .center{max-width:420px;margin:12vh auto 0}
+  label{display:block;font-size:13px;color:var(--sub);margin:12px 0 4px}
+  input[type=text],input[type=password],input[type=search],select,textarea{width:100%;padding:11px 12px;border:1px solid var(--line);border-radius:10px;background:var(--bg);color:var(--ink);font-size:16px;font-family:inherit}
+  textarea{min-height:80px;resize:vertical}
+  input:focus,select:focus,textarea:focus{outline:2px solid var(--accent);outline-offset:0;border-color:transparent}
+  button{font:inherit;font-size:15px;padding:10px 14px;border-radius:10px;border:1px solid var(--line);background:var(--card);color:var(--ink);cursor:pointer;-webkit-tap-highlight-color:transparent}
+  button.primary{background:var(--accent);color:var(--accent-ink);border-color:var(--accent);font-weight:600}
+  button.danger{color:var(--danger);border-color:var(--danger)}
+  button.small{font-size:13px;padding:6px 10px;border-radius:8px}
+  button.block{width:100%;margin-top:16px}
+  button:disabled{opacity:.5;cursor:default}
+  .row{display:flex;gap:8px;align-items:center}
+  .row > *{flex:1}
+  .row > button{flex:0 0 auto}
+  .msg{font-size:14px;color:var(--sub);margin-top:8px}
+  .err{color:var(--danger);font-size:14px;margin-top:8px;min-height:1.4em}
+  .tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:6px;-webkit-overflow-scrolling:touch}
+  .tabs button{white-space:nowrap;border-radius:999px;background:var(--chip);border-color:transparent}
+  .tabs button.on{background:var(--accent);color:var(--accent-ink)}
+  .list{display:flex;flex-direction:column;gap:8px}
+  .item{display:flex;align-items:center;justify-content:space-between;gap:10px;background:var(--card);border:1px solid var(--line);border-radius:12px;padding:12px 14px;cursor:pointer}
+  .item:active{opacity:.7}
+  .item .t{font-weight:600}
+  .item .c{font-size:12px;color:var(--sub);background:var(--chip);border-radius:6px;padding:2px 8px;flex:0 0 auto}
+  .item .s{font-size:13px;color:var(--sub);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .empty{color:var(--sub);text-align:center;padding:40px 0}
+  .field{display:flex;flex-direction:column;gap:2px;padding:10px 0;border-bottom:1px solid var(--line)}
+  .field:last-child{border-bottom:none}
+  .field .l{font-size:12px;color:var(--sub)}
+  .field .vrow{display:flex;align-items:center;gap:8px}
+  .field .v{flex:1;font-size:17px;word-break:break-all;font-variant-numeric:tabular-nums}
+  .field .v.masked{color:var(--mask);letter-spacing:2px}
+  .field .v a{color:var(--accent)}
+  .memo{white-space:pre-wrap;font-size:15px}
+  .frow{display:grid;grid-template-columns:1fr 1.4fr auto auto;gap:6px;align-items:center;margin-bottom:6px}
+  .frow input{padding:9px 10px;font-size:15px}
+  .frow .chk{font-size:12px;color:var(--sub);white-space:nowrap;display:flex;align-items:center;gap:3px;margin:0}
+  .frow button{padding:8px 10px}
+  .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:9}
+  .toast.show{opacity:1}
+  .meta{font-size:12px;color:var(--sub);margin-top:10px}
+  .hint{font-size:13px;color:var(--sub);line-height:1.6}
+  .hint ol{padding-left:20px;margin:6px 0}
+  table.map{width:100%;border-collapse:collapse;font-size:14px}
+  table.map td{padding:6px 4px;border-bottom:1px solid var(--line);vertical-align:middle}
+  table.map td:first-child{width:45%;word-break:break-all}
+  table.map select{padding:6px 8px;font-size:14px}
+  .sep{height:1px;background:var(--line);margin:16px 0}
+  .kbd{font-family:ui-monospace,Menlo,monospace;font-size:13px;background:var(--chip);padding:1px 6px;border-radius:5px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast" class="toast"></div>
+
+<script>
+'use strict';
+/* =========================================================
+   家の金庫 — 1ファイルで動く、家族2人用のパスワード・口座管理
+   ・データはこのブラウザの中（localStorage）に AES-GCM で暗号化して保存
+   ・鍵はマスターパスワードから PBKDF2 で作る。平文はどこにも書かない
+   ・共有は「書き出し（暗号化ファイル）→ 相手が読み込み」で行う
+   ========================================================= */
+
+const STORE_KEY = 'ienokinko.vault.v1';
+const IDLE_LOCK_MS = 5 * 60 * 1000;   // 5分さわらなければ自動ロック
+const PBKDF2_ITER = 600000;
+
+const CATEGORIES = ['銀行口座', 'クレジットカード', 'ログイン', 'その他'];
+const TEMPLATES = {
+  '銀行口座': [['銀行名', false], ['支店名', false], ['口座種別', false], ['口座番号', true], ['口座名義', false], ['ネットバンキングID', false], ['ログインパスワード', true], ['暗証番号', true]],
+  'クレジットカード': [['カード会社', false], ['カード番号', true], ['名義', false], ['有効期限', true], ['セキュリティコード', true], ['暗証番号', true], ['会員サイトID', false], ['会員サイトパスワード', true]],
+  'ログイン': [['URL', false], ['ID・メール', false], ['パスワード', true]],
+  'その他': [['内容', true]],
+};
+const SECRET_WORDS = /パスワード|password|pass|pw|暗証|pin|番号|number|no\.|コード|code|セキュリティ|cvv|cvc|秘密|鍵|key|token|トークン/i;
+const TITLE_WORDS = /^(名前|名称|サービス|サービス名|サイト|サイト名|銀行|銀行名|カード|カード会社|項目|タイトル|title|name|site)$/i;
+
+/* ---------- 小道具 ---------- */
+const $ = (sel, el = document) => el.querySelector(sel);
+const $$ = (sel, el = document) => Array.from(el.querySelectorAll(sel));
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const b64 = u8 => btoa(String.fromCharCode(...u8));
+const unb64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
+const uid = () => (crypto.randomUUID ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+const now = () => new Date().toISOString();
+const fmtDate = iso => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getFullYear()}/${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`; };
+const today = () => new Date().toISOString().slice(0, 10);
+
+let toastTimer;
+function toast(msg) {
+  const t = $('#toast'); t.textContent = msg; t.classList.add('show');
+  clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), 1600);
+}
+
+async function copyText(text) {
+  try { await navigator.clipboard.writeText(text); }
+  catch (e) {
+    const ta = document.createElement('textarea'); ta.value = text; ta.style.position = 'fixed'; ta.style.opacity = '0';
+    document.body.appendChild(ta); ta.select(); document.execCommand('copy'); ta.remove();
+  }
+  toast('コピーしました');
+}
+
+/* ---------- 暗号（Web Crypto） ---------- */
+async function deriveKey(password, salt, iterations) {
+  const base = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveKey']);
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
+    base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
+}
+async function encryptItems(key, salt, iterations, items) {
+  const iv = crypto.getRandomValues(new Uint8Array(12));
+  const data = new TextEncoder().encode(JSON.stringify({ items }));
+  const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
+  return { app: 'ienokinko', v: 1, kdf: { name: 'PBKDF2-SHA256', iterations }, salt: b64(salt), iv: b64(iv), data: b64(new Uint8Array(ct)), savedAt: now() };
+}
+async function decryptBlob(blob, password) {
+  const salt = unb64(blob.salt);
+  const key = await deriveKey(password, salt, blob.kdf?.iterations || PBKDF2_ITER);
+  const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(blob.iv) }, key, unb64(blob.data));
+  const obj = JSON.parse(new TextDecoder().decode(pt));
+  return { key, salt, items: obj.items || [] };
+}
+
+/* ---------- 保存 ---------- */
+function loadBlob() { try { const s = localStorage.getItem(STORE_KEY); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
+function saveBlobRaw(blob) { localStorage.setItem(STORE_KEY, JSON.stringify(blob)); }
+
+/* ---------- 状態 ---------- */
+const S = { key: null, salt: null, iter: PBKDF2_ITER, items: [], view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
+
+async function persist() {
+  const blob = await encryptItems(S.key, S.salt, S.iter, S.items);
+  saveBlobRaw(blob);
+}
+function lock() {
+  S.key = null; S.salt = null; S.items = []; S.view = 'list'; S.detailId = null; S.editId = null; S.shown.clear();
+  render();
+}
+let idleTimer;
+function bumpIdle() {
+  clearTimeout(idleTimer);
+  if (S.key) idleTimer = setTimeout(() => { lock(); toast('しばらく操作がなかったのでロックしました'); }, IDLE_LOCK_MS);
+}
+['pointerdown', 'keydown', 'touchstart'].forEach(ev => document.addEventListener(ev, bumpIdle, { passive: true }));
+
+/* ---------- 画面 ---------- */
+const app = $('#app');
+
+function render() {
+  if (!S.key) { return loadBlob() ? renderUnlock() : renderSetup(); }
+  bumpIdle();
+  if (S.view === 'detail') return renderDetail();
+  if (S.view === 'edit') return renderEdit();
+  if (S.view === 'settings') return renderSettings();
+  if (S.view === 'csv') return renderCsv();
+  return renderList();
+}
+
+/* 初回：マスターパスワードを決める */
+function renderSetup() {
+  app.innerHTML = `
+  <div class="card center">
+    <h1>家の金庫</h1>
+    <p class="hint">はじめに、ふたりで共有する「マスターパスワード」を決めます。<br>
+    これ1つで全部の鍵が開きます。忘れると誰にも開けられないので、紙にも控えてください。</p>
+    <label>マスターパスワード（12文字以上をおすすめ）</label>
+    <input type="password" id="pw1" autocomplete="new-password">
+    <label>もう一度</label>
+    <input type="password" id="pw2" autocomplete="new-password">
+    <div class="err" id="err"></div>
+    <button class="primary block" id="go">この合言葉で金庫を作る</button>
+    <div class="sep"></div>
+    <p class="hint">すでに書き出したファイル（.kinko）がある人は、こちらから復元できます。</p>
+    <button class="block" id="restore">ファイルから復元する</button>
+    <input type="file" id="restoreFile" accept=".kinko,.json,application/json" hidden>
+  </div>`;
+  $('#go').onclick = async () => {
+    const a = $('#pw1').value, b = $('#pw2').value;
+    if (a.length < 8) return $('#err').textContent = '8文字以上にしてください';
+    if (a !== b) return $('#err').textContent = '2つが一致しません';
+    $('#go').disabled = true; $('#go').textContent = '鍵を作っています…';
+    S.salt = crypto.getRandomValues(new Uint8Array(16)); S.iter = PBKDF2_ITER;
+    S.key = await deriveKey(a, S.salt, S.iter); S.items = [];
+    await persist(); render();
+  };
+  $('#restore').onclick = () => $('#restoreFile').click();
+  $('#restoreFile').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const blob = JSON.parse(await f.text());
+      if (blob.app !== 'ienokinko') throw new Error();
+      saveBlobRaw(blob); toast('復元しました。合言葉を入れてください'); render();
+    } catch (err) { $('#err').textContent = 'このファイルは読めませんでした'; }
+  };
+  $('#pw1').focus();
+}
+
+/* ロック解除 */
+function renderUnlock() {
+  app.innerHTML = `
+  <div class="card center">
+    <h1>家の金庫</h1>
+    <label>マスターパスワード</label>
+    <input type="password" id="pw" autocomplete="current-password">
+    <div class="err" id="err"></div>
+    <button class="primary block" id="go">開ける</button>
+  </div>`;
+  const go = async () => {
+    const pw = $('#pw').value; if (!pw) return;
+    $('#go').disabled = true; $('#go').textContent = '確認中…';
+    try {
+      const r = await decryptBlob(loadBlob(), pw);
+      S.key = r.key; S.salt = r.salt; S.iter = loadBlob().kdf?.iterations || PBKDF2_ITER; S.items = r.items;
+      S.view = 'list'; render();
+    } catch (e) {
+      $('#err').textContent = '合言葉が違います'; $('#go').disabled = false; $('#go').textContent = '開ける'; $('#pw').select();
+    }
+  };
+  $('#go').onclick = go;
+  $('#pw').onkeydown = e => { if (e.key === 'Enter') go(); };
+  $('#pw').focus();
+}
+
+/* 一覧 */
+function topBar(title, backTo) {
+  return `<div class="top">
+    <div class="row" style="gap:10px">
+      ${backTo ? `<button class="small" data-nav="${backTo}">← 戻る</button>` : ''}
+      <h1>${esc(title)}</h1>
+    </div>
+    <div class="actions">
+      ${backTo ? '' : `<button class="small" data-nav="settings">設定</button>`}
+      <button class="small" id="lockBtn">ロック</button>
+    </div>
+  </div>`;
+}
+function wireNav(root = app) {
+  $$('[data-nav]', root).forEach(b => b.onclick = () => { S.view = b.dataset.nav; render(); });
+  const l = $('#lockBtn', root); if (l) l.onclick = lock;
+}
+function summaryOf(it) {
+  const f = it.fields.find(x => !x.secret && x.value); return f ? f.value : '';
+}
+function renderList() {
+  const q = S.q.trim().toLowerCase();
+  const items = S.items
+    .filter(it => S.cat === 'すべて' || it.category === S.cat)
+    .filter(it => !q || (it.title + ' ' + it.memo + ' ' + it.fields.filter(f => !f.secret).map(f => f.value).join(' ')).toLowerCase().includes(q))
+    .sort((a, b) => a.title.localeCompare(b.title, 'ja'));
+  app.innerHTML = `
+  ${topBar('家の金庫')}
+  <div class="row" style="margin-bottom:10px">
+    <input type="search" id="q" placeholder="検索（名前・ID・メモ）" value="${esc(S.q)}">
+    <button class="primary" id="add">＋ 追加</button>
+  </div>
+  <div class="tabs">${['すべて', ...CATEGORIES].map(c => `<button class="${c === S.cat ? 'on' : ''}" data-cat="${c}">${c}</button>`).join('')}</div>
+  <div class="list">
+    ${items.length ? items.map(it => `
+      <div class="item" data-id="${it.id}">
+        <div style="min-width:0"><div class="t">${esc(it.title || '（無題）')}</div><div class="s">${esc(summaryOf(it))}</div></div>
+        <div class="c">${esc(it.category)}</div>
+      </div>`).join('') : `<div class="empty">${S.items.length ? '見つかりません' : 'まだ何もありません。「＋ 追加」か、設定の「CSV から取り込む」から始めてください'}</div>`}
+  </div>`;
+  wireNav();
+  $('#q').oninput = e => { S.q = e.target.value; const pos = e.target.selectionStart; renderList(); const el = $('#q'); el.focus(); el.setSelectionRange(pos, pos); };
+  $('#add').onclick = () => { S.editId = null; S.view = 'edit'; render(); };
+  $$('[data-cat]').forEach(b => b.onclick = () => { S.cat = b.dataset.cat; render(); });
+  $$('.item').forEach(el => el.onclick = () => { S.detailId = el.dataset.id; S.shown.clear(); S.view = 'detail'; render(); });
+}
+
+/* 詳細 */
+function renderDetail() {
+  const it = S.items.find(x => x.id === S.detailId);
+  if (!it) { S.view = 'list'; return render(); }
+  app.innerHTML = `
+  ${topBar(it.title || '（無題）', 'list')}
+  <div class="card">
+    <div class="meta" style="margin:0 0 6px">${esc(it.category)}</div>
+    ${it.fields.filter(f => f.value).map((f, i) => `
+      <div class="field">
+        <div class="l">${esc(f.label)}</div>
+        <div class="vrow">
+          <div class="v ${f.secret && !S.shown.has(i) ? 'masked' : ''}" data-i="${i}">${
+            f.secret && !S.shown.has(i) ? '••••••••' :
+            (/^https?:\/\//i.test(f.value) ? `<a href="${esc(f.value)}" target="_blank" rel="noopener">${esc(f.value)}</a>` : esc(f.value))
+          }</div>
+          ${f.secret ? `<button class="small" data-show="${i}">${S.shown.has(i) ? '隠す' : '表示'}</button>` : ''}
+          <button class="small" data-copy="${i}">コピー</button>
+        </div>
+      </div>`).join('')}
+    ${it.memo ? `<div class="field"><div class="l">メモ</div><div class="memo">${esc(it.memo)}</div></div>` : ''}
+    <div class="meta">最終更新 ${fmtDate(it.updated)}</div>
+  </div>
+  <div class="row">
+    <button class="primary" id="edit">編集</button>
+    <button class="danger" id="del">削除</button>
+  </div>`;
+  wireNav();
+  $$('[data-show]').forEach(b => b.onclick = () => { const i = +b.dataset.show; S.shown.has(i) ? S.shown.delete(i) : S.shown.add(i); renderDetail(); });
+  $$('[data-copy]').forEach(b => b.onclick = () => copyText(it.fields[+b.dataset.copy].value));
+  $('#edit').onclick = () => { S.editId = it.id; S.view = 'edit'; render(); };
+  $('#del').onclick = async () => {
+    if (!confirm(`「${it.title}」を削除します。元に戻せません。よろしいですか？`)) return;
+    S.items = S.items.filter(x => x.id !== it.id); await persist(); S.view = 'list'; toast('削除しました'); render();
+  };
+}
+
+/* 追加・編集 */
+function genPassword(len = 16) {
+  const chars = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!#$%&*+-=?@';
+  const a = crypto.getRandomValues(new Uint32Array(len));
+  return Array.from(a, n => chars[n % chars.length]).join('');
+}
+function renderEdit() {
+  const orig = S.items.find(x => x.id === S.editId);
+  const draft = orig ? JSON.parse(JSON.stringify(orig)) : { id: uid(), category: S.cat !== 'すべて' ? S.cat : 'ログイン', title: '', fields: TEMPLATES[S.cat !== 'すべて' ? S.cat : 'ログイン'].map(([label, secret]) => ({ label, value: '', secret })), memo: '' };
+
+  const draw = () => {
+    app.innerHTML = `
+    ${topBar(orig ? '編集' : '追加', orig ? 'detail' : 'list')}
+    <div class="card">
+      <label>種類</label>
+      <select id="cat">${CATEGORIES.map(c => `<option ${c === draft.category ? 'selected' : ''}>${c}</option>`).join('')}</select>
+      <label>名前（例：三井住友銀行、楽天カード、Amazon）</label>
+      <input type="text" id="title" value="${esc(draft.title)}" autocomplete="off">
+      <label>項目　　<span class="hint">「秘密」にチェックすると隠して表示されます</span></label>
+      <div id="fields">
+        ${draft.fields.map((f, i) => `
+        <div class="frow" data-i="${i}">
+          <input type="text" class="fl" placeholder="項目名" value="${esc(f.label)}" autocomplete="off">
+          <input type="text" class="fv" placeholder="値" value="${esc(f.value)}" autocomplete="off" ${f.secret ? 'style="-webkit-text-security:disc"' : ''}>
+          <label class="chk"><input type="checkbox" class="fs" ${f.secret ? 'checked' : ''}>秘密</label>
+          <button class="small fx" title="この項目を消す">×</button>
+        </div>`).join('')}
+      </div>
+      <div class="row" style="margin-top:6px">
+        <button class="small" id="addField">＋ 項目を足す</button>
+        <button class="small" id="genPw">パスワードを自動生成してコピー</button>
+      </div>
+      <label>メモ</label>
+      <textarea id="memo">${esc(draft.memo)}</textarea>
+      <div class="err" id="err"></div>
+      <button class="primary block" id="save">保存</button>
+    </div>`;
+    wireNav();
+    const sync = () => {
+      draft.category = $('#cat').value; draft.title = $('#title').value; draft.memo = $('#memo').value;
+      draft.fields = $$('.frow').map(r => ({ label: $('.fl', r).value, value: $('.fv', r).value, secret: $('.fs', r).checked }));
+    };
+    $('#cat').onchange = () => {
+      sync();
+      const filled = draft.fields.some(f => f.value);
+      if (!filled) draft.fields = TEMPLATES[draft.category].map(([label, secret]) => ({ label, value: '', secret }));
+      draw();
+    };
+    $$('.fs').forEach(c => c.onchange = () => { sync(); draw(); });
+    $$('.fx').forEach(b => b.onclick = () => { sync(); draft.fields.splice(+b.closest('.frow').dataset.i, 1); draw(); });
+    $('#addField').onclick = () => { sync(); draft.fields.push({ label: '', value: '', secret: false }); draw(); $$('.fl').pop().focus(); };
+    $('#genPw').onclick = () => { const p = genPassword(); copyText(p); toast('新しいパスワードをコピーしました。値の欄に貼り付けてください'); };
+    $('#save').onclick = async () => {
+      sync();
+      if (!draft.title.trim()) return $('#err').textContent = '名前を入れてください';
+      draft.fields = draft.fields.filter(f => f.label.trim() || f.value.trim());
+      draft.updated = now();
+      const i = S.items.findIndex(x => x.id === draft.id);
+      if (i >= 0) S.items[i] = draft; else S.items.push(draft);
+      await persist();
+      S.detailId = draft.id; S.view = 'detail'; toast('保存しました'); render();
+    };
+  };
+  draw();
+  if (!orig) $('#title').focus();
+}
+
+/* 設定 */
+function renderSettings() {
+  app.innerHTML = `
+  ${topBar('設定', 'list')}
+  <div class="card">
+    <h2>ふたりで共有する</h2>
+    <p class="hint">この金庫はこのブラウザの中にだけあります。相手にも同じ中身を渡すには、暗号化したファイルを書き出して送り、相手が読み込みます。ファイルは合言葉がないと開けないので、AirDrop や iCloud Drive で渡して大丈夫です。</p>
+    <div class="row">
+      <button id="export">書き出す（.kinko）</button>
+      <button id="import">読み込む</button>
+    </div>
+    <input type="file" id="importFile" accept=".kinko,.json,application/json" hidden>
+    <label class="chk" style="margin-top:10px"><input type="checkbox" id="replace"> 読み込むとき、今の中身を全部置き換える（ふだんはチェック不要。新しい方だけ取り込みます）</label>
+  </div>
+  <div class="card">
+    <h2>スプレッドシートから取り込む</h2>
+    <p class="hint">Google スプレッドシートで <span class="kbd">ファイル → ダウンロード → カンマ区切り形式（.csv）</span> と進み、そのファイルを選びます。シートが複数ある場合は、シートごとに1回ずつ。</p>
+    <button class="block" style="margin-top:8px" data-nav="csv">CSV から取り込む</button>
+  </div>
+  <div class="card">
+    <h2>合言葉を変える</h2>
+    <label>新しいマスターパスワード</label>
+    <input type="password" id="np1" autocomplete="new-password">
+    <label>もう一度</label>
+    <input type="password" id="np2" autocomplete="new-password">
+    <div class="err" id="perr"></div>
+    <button class="block" id="chpw">変更する</button>
+    <p class="hint" style="margin-top:8px">変えたら相手にも伝え、書き出したファイルを渡し直してください。</p>
+  </div>
+  <div class="card">
+    <h2>この端末から消す</h2>
+    <p class="hint">書き出したファイルがあれば、あとで「ファイルから復元する」で戻せます。</p>
+    <button class="danger block" id="wipe">この端末の金庫を全部消す</button>
+  </div>
+  <div class="meta">登録件数 ${S.items.length}件 ／ 5分さわらないと自動でロックします</div>`;
+  wireNav();
+  $('#export').onclick = async () => {
+    await persist();
+    const blob = new Blob([localStorage.getItem(STORE_KEY)], { type: 'application/json' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `家の金庫_${today()}.kinko`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast('書き出しました');
+  };
+  $('#import').onclick = () => $('#importFile').click();
+  $('#importFile').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    let blob; try { blob = JSON.parse(await f.text()); if (blob.app !== 'ienokinko') throw 0; } catch (err) { return toast('このファイルは読めませんでした'); }
+    const pw = prompt('そのファイルを作ったときの合言葉を入れてください');
+    if (pw == null) return;
+    let r; try { r = await decryptBlob(blob, pw); } catch (err) { return toast('合言葉が違います'); }
+    if ($('#replace').checked) {
+      if (!confirm(`今の ${S.items.length}件を消して、ファイルの ${r.items.length}件に置き換えます。よろしいですか？`)) return;
+      S.items = r.items;
+    } else {
+      let added = 0, updated = 0;
+      for (const it of r.items) {
+        const i = S.items.findIndex(x => x.id === it.id);
+        if (i < 0) { S.items.push(it); added++; }
+        else if ((it.updated || '') > (S.items[i].updated || '')) { S.items[i] = it; updated++; }
+      }
+      toast(`追加 ${added}件、更新 ${updated}件`);
+    }
+    await persist(); S.view = 'list'; render();
+  };
+  $('#chpw').onclick = async () => {
+    const a = $('#np1').value, b = $('#np2').value;
+    if (a.length < 8) return $('#perr').textContent = '8文字以上にしてください';
+    if (a !== b) return $('#perr').textContent = '2つが一致しません';
+    S.salt = crypto.getRandomValues(new Uint8Array(16)); S.iter = PBKDF2_ITER;
+    S.key = await deriveKey(a, S.salt, S.iter); await persist();
+    $('#np1').value = $('#np2').value = ''; toast('合言葉を変えました');
+  };
+  $('#wipe').onclick = () => {
+    if (!confirm('この端末の金庫を全部消します。書き出したファイルがないと戻せません。よろしいですか？')) return;
+    if (prompt('確認のため「消す」と入力してください') !== '消す') return;
+    localStorage.removeItem(STORE_KEY); lock(); toast('消しました');
+  };
+}
+
+/* CSV 取り込み */
+function parseCsv(text) {
+  text = text.replace(/^﻿/, '');
+  const rows = []; let row = [], cell = '', inQ = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQ) {
+      if (c === '"') { if (text[i + 1] === '"') { cell += '"'; i++; } else inQ = false; }
+      else cell += c;
+    } else if (c === '"') inQ = true;
+    else if (c === ',') { row.push(cell); cell = ''; }
+    else if (c === '\n' || c === '\r') { if (c === '\r' && text[i + 1] === '\n') i++; row.push(cell); rows.push(row); row = []; cell = ''; }
+    else cell += c;
+  }
+  if (cell !== '' || row.length) { row.push(cell); rows.push(row); }
+  return rows.filter(r => r.some(x => x.trim() !== ''));
+}
+function renderCsv() {
+  app.innerHTML = `
+  ${topBar('CSV から取り込む', 'settings')}
+  <div class="card">
+    <p class="hint">1行目が見出し（項目名）になっているシートを想定しています。見出しがない場合は、先にスプレッドシート側で1行目に項目名を入れてください。</p>
+    <input type="file" id="csv" accept=".csv,text/csv" style="margin-top:8px">
+    <div id="mapArea"></div>
+  </div>`;
+  wireNav();
+  $('#csv').onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    let text = await f.text();
+    const rows = parseCsv(text);
+    if (rows.length < 2) return toast('データが見つかりませんでした');
+    const headers = rows[0].map((h, i) => h.trim() || `列${i + 1}`);
+    const body = rows.slice(1);
+    let titleGuessed = false;
+    const guess = h => {
+      if (!titleGuessed && TITLE_WORDS.test(h.trim())) { titleGuessed = true; return 'title'; }
+      if (/メモ|備考|note|memo/i.test(h)) return 'memo';
+      if (SECRET_WORDS.test(h)) return 'secret';
+      return 'plain';
+    };
+    const opts = [['title', '名前にする'], ['plain', '項目（そのまま表示）'], ['secret', '項目（秘密・隠す）'], ['memo', 'メモに入れる'], ['skip', '取り込まない']];
+    $('#mapArea').innerHTML = `
+      <div class="meta">${body.length}行 見つかりました。各列をどう扱うか決めてください。</div>
+      <label>取り込む先の種類</label>
+      <select id="csvCat">${CATEGORIES.map(c => `<option>${c}</option>`).join('')}</select>
+      <table class="map" style="margin-top:10px">
+        ${headers.map((h, i) => { const g = guess(h); return `<tr><td>${esc(h)}<div class="hint" style="font-size:12px">例：${esc((body[0][i] || '').slice(0, 20))}${g === 'secret' ? '' : ''}</div></td><td><select class="mapSel" data-i="${i}">${opts.map(([v, l]) => `<option value="${v}" ${v === g ? 'selected' : ''}>${l}</option>`).join('')}</select></td></tr>`; }).join('')}
+      </table>
+      <div class="err" id="cerr"></div>
+      <button class="primary block" id="doImport">この設定で取り込む</button>`;
+    if (!titleGuessed) $$('.mapSel')[0].value = 'title';
+    $('#doImport').onclick = async () => {
+      const map = $$('.mapSel').map(s => s.value);
+      if (!map.includes('title')) return $('#cerr').textContent = '「名前にする」列を1つ選んでください';
+      const cat = $('#csvCat').value; let n = 0;
+      for (const r of body) {
+        const it = { id: uid(), category: cat, title: '', fields: [], memo: '', updated: now() };
+        const memos = [];
+        r.forEach((v, i) => {
+          v = (v || '').trim(); if (!v || !headers[i]) return;
+          const m = map[i] || 'skip';
+          if (m === 'title') it.title = it.title ? it.title + ' ' + v : v;
+          else if (m === 'memo') memos.push(v);
+          else if (m === 'plain') it.fields.push({ label: headers[i], value: v, secret: false });
+          else if (m === 'secret') it.fields.push({ label: headers[i], value: v, secret: true });
+        });
+        it.memo = memos.join('\n');
+        if (!it.title && !it.fields.length) continue;
+        if (!it.title) it.title = '（無題）';
+        S.items.push(it); n++;
+      }
+      await persist(); S.view = 'list'; S.cat = cat; toast(`${n}件 取り込みました`); render();
+    };
+  };
+}
+
+/* ---------- 起動 ---------- */
+if (!window.isSecureContext || !crypto.subtle) {
+  app.innerHTML = `<div class="card center"><h1>家の金庫</h1><p class="hint">このブラウザでは暗号化機能が使えません。Safari か Chrome でファイルを直接開いてください。</p></div>`;
+} else {
+  render();
+}
+</script>
+</body>
+</html>
