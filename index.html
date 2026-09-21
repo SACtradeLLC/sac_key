@@ -103,7 +103,7 @@ const DEFAULT_FIELDS = [['ID', false], ['パスワード', true]];
 const fieldsFor = cat => (TEMPLATES[cat] || DEFAULT_FIELDS).map(([label, secret]) => ({ label, value: '', secret }));
 const allCats = () => [...new Set([...CATEGORIES, ...S.items.map(i => i.category).filter(Boolean)])];
 const catFromFileName = name => { const m = String(name || '').replace(/\.[^.]+$/, '').split(/\s+-\s+/); return m.length > 1 ? m[m.length - 1].trim() : ''; };
-const SECRET_WORDS = /パスワード|password|pass|pw|暗証|pin|番号|number|no\.|コード|code|セキュリティ|cvv|cvc|秘密|鍵|key|token|トークン/i;
+const SECRET_WORDS = /パスワード|password|pass|pw|ＰＷ|暗証|pin|番号|number|no\.|コード|code|セキュリティ|cvv|cvc|秘密|鍵|key|token|トークン|期限|認証/i;
 const TITLE_WORDS = /^(名前|名称|サービス|サービス名|サイト|サイト名|銀行|銀行名|カード|カード会社|項目|タイトル|title|name|site)$/i;
 
 /* ---------- 小道具 ---------- */
@@ -485,6 +485,49 @@ function renderSettings() {
   };
 }
 
+/* ラベル形式（【カード名】の下に「項目名, 値」が縦に並ぶ表）の読み取り */
+const HEAD_RE = /^[\s☆彡★◎○●]*【/;
+const ACCOUNT_WORDS = /銀行|カード|カ－ド|アメックス|アメリカン|amex|visa|jcb|master|証券|信金|公庫|ゆうちょ|paypay|ペイ/i;
+const isBlockLayout = rows => rows.some(r => r.some(c => HEAD_RE.test(c)));
+function parseBlocks(rows, defaultCat) {
+  // ラベル列 = 【見出し】が現れる列。その右隣が値列
+  const labelCols = [...new Set(rows.flatMap(r => r.map((c, i) => HEAD_RE.test(c) ? i : -1).filter(i => i >= 0)))].sort((a, b) => a - b);
+  if (!labelCols.length) return [];
+  const cat = {}, cur = {}, items = [];
+  const cell = (r, i) => (rows[r][i] || '').trim();
+  const startItem = (c, title, r) => {
+    const it = { id: uid(), category: cat[c] || defaultCat, title: title.replace(/^[\s☆彡★◎○●]*/, '').replace(/[【】]/g, ' ').replace(/\s+/g, ' ').trim(), fields: [], memo: '', updated: now(), _row: r };
+    items.push(it); cur[c] = it; return it;
+  };
+  const nearest = c => { for (let k = c; k >= 0; k--) if (cur[k]) return cur[k]; return null; };
+  const addMemo = (it, text) => { if (it) it.memo = it.memo ? it.memo + '\n' + text : text; };
+  for (let r = 0; r < rows.length; r++) {
+    const used = new Set();
+    for (const c of labelCols) {
+      const label = cell(r, c), value = cell(r, c + 1);
+      used.add(c); used.add(c + 1);
+      if (!label && !value) continue;
+      if (!label) { const it = cur[c] || nearest(c); if (it) it.fields.push({ label: '', value, secret: true }); continue; }
+      if (!value) {
+        if (r === 0 && !cur[c]) { cat[c] = label; continue; }               // 1行目の「クレジットカード」「銀行」は種類
+        if (/^[\w\-+#@\/=!?.]+$/.test(label) && /\d/.test(label)) {          // 数字だけの行（暗証番号など）は項目名なしの秘密として扱う
+          const it = cur[c] || nearest(c); if (it) { it.fields.push({ label: '', value: label, secret: true }); continue; }
+        }
+        const prevBlank = r === 0 || !cell(r - 1, c);
+        if (HEAD_RE.test(label) || prevBlank || ACCOUNT_WORDS.test(label)) startItem(c, label, r);
+        else addMemo(cur[c] || nearest(c), label);
+        continue;
+      }
+      if (HEAD_RE.test(label)) { const it = startItem(c, label, r); it.fields.push({ label: '', value, secret: true }); continue; }
+      const it = cur[c] || startItem(c, '（無題）', r);
+      it.fields.push({ label, value, secret: SECRET_WORDS.test(label) });
+    }
+    // ラベル列でも値列でもない場所に何か書いてあれば、いちばん近い項目のメモへ
+    rows[r].forEach((v, i) => { if (!used.has(i) && (v || '').trim()) addMemo(nearest(i), v.trim()); });
+  }
+  return items.filter(it => it.fields.length || it.memo).map(it => { delete it._row; return it; });
+}
+
 /* CSV 取り込み */
 function parseCsv(text) {
   text = text.replace(/^﻿/, '');
@@ -506,7 +549,7 @@ function renderCsv() {
   app.innerHTML = `
   ${topBar('CSV から取り込む', 'settings')}
   <div class="card">
-    <p class="hint">1行目が見出し（項目名）になっているシートを想定しています。見出しがない場合は、先にスプレッドシート側で1行目に項目名を入れてください。</p>
+    <p class="hint">2つの形に対応しています。<b>表の形</b>（1行目が見出し）と、<b>ラベルの形</b>（「【カード名】」の下に「番号, ○○」「PW, ○○」のように項目名と値が縦に並ぶ形）。どちらかは自動で見分けます。</p>
     <input type="file" id="csv" accept=".csv,text/csv" style="margin-top:8px">
     <div class="sep"></div>
     <p class="hint"><b>もっと簡単な方法：</b>スプレッドシートで、見出しの行から最後の行までをドラッグして選び <span class="kbd">⌘C</span>。下の枠に <span class="kbd">⌘V</span> で貼り付けます。シートごとに繰り返してください。</p>
@@ -530,7 +573,8 @@ function renderCsv() {
     $('#mapArea').scrollIntoView({ behavior: 'smooth' });
   };
   function showMapping(rows, defaultCat) {
-    if (rows.length < 2) return toast('データが見つかりませんでした（見出し行＋1行以上が必要です）');
+    if (rows.length < 2) return toast('データが見つかりませんでした');
+    if (isBlockLayout(rows)) return showBlocks(rows, defaultCat);
     const headers = rows[0].map((h, i) => h.trim() || `列${i + 1}`);
     const body = rows.slice(1);
     let titleGuessed = false;
@@ -573,6 +617,27 @@ function renderCsv() {
         S.items.push(it); n++;
       }
       await persist(); S.view = 'list'; S.cat = cat; toast(`${n}件 取り込みました`); render();
+    };
+  }
+  function showBlocks(rows, defaultCat) {
+    const items = parseBlocks(rows, defaultCat);
+    if (!items.length) return toast('読み取れませんでした');
+    $('#mapArea').innerHTML = `
+      <div class="meta">「【名前】の下に項目名と値が並ぶ形」として読みました。${items.length}件 見つかりました。取り込んだあと、1件ずつ開いて直せます。</div>
+      <label>「種類」が付かなかったものに付ける種類</label>
+      <input type="text" id="blkCat" list="blkCatList" value="${esc(defaultCat)}" autocomplete="off">
+      <datalist id="blkCatList">${allCats().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+      <div class="list" style="margin-top:10px">
+        ${items.map((it, i) => `<label class="item" style="cursor:pointer"><input type="checkbox" class="blkSel" data-i="${i}" checked style="margin-right:8px">
+          <div style="min-width:0;flex:1"><div class="t">${esc(it.title)}</div><div class="s">${it.fields.length}項目${it.fields.some(f => !f.label) ? '（項目名のない値あり）' : ''}${it.memo ? '・メモあり' : ''}</div></div>
+          <div class="c">${esc(it.category)}</div></label>`).join('')}
+      </div>
+      <button class="primary block" id="doBlk">チェックしたものを取り込む</button>`;
+    $('#doBlk').onclick = async () => {
+      const fallback = $('#blkCat').value.trim() || 'その他';
+      const sel = $$('.blkSel').filter(c => c.checked).map(c => items[+c.dataset.i]);
+      for (const it of sel) { if (it.category === defaultCat) it.category = fallback; S.items.push(it); }
+      await persist(); S.view = 'list'; S.cat = 'すべて'; toast(`${sel.length}件 取り込みました`); render();
     };
   }
 }
