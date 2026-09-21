@@ -25,7 +25,7 @@
     }
   }
   *{box-sizing:border-box}
-  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;font-size:16px;line-height:1.55;-webkit-text-size-adjust:100%}
+  html,body{margin:0;overflow-x:clip;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;font-size:16px;line-height:1.55;-webkit-text-size-adjust:100%}
   #app{max-width:720px;margin:0 auto;padding:16px;min-height:100vh}
   h1{font-size:20px;margin:0}
   h2{font-size:17px;margin:0 0 12px}
@@ -52,7 +52,9 @@
   .row > button{flex:0 0 auto}
   .msg{font-size:14px;color:var(--sub);margin-top:8px}
   .err{color:var(--danger);font-size:14px;margin-top:8px;min-height:1.4em}
-  .tabs{display:flex;gap:6px;overflow-x:auto;padding-bottom:6px;margin-bottom:6px;-webkit-overflow-scrolling:touch}
+  .tabs{display:flex;gap:6px;overflow-x:auto;overscroll-behavior-x:contain;padding:0 16px 6px;margin:0 -16px 6px;-webkit-overflow-scrolling:touch;scrollbar-width:none}
+  .tabs::-webkit-scrollbar{display:none}
+  .tabs::after{content:"";flex:0 0 8px}
   .tabs button{white-space:nowrap;border-radius:999px;background:var(--chip);border-color:transparent}
   .tabs button.on{background:var(--accent);color:var(--accent-ink)}
   .list{display:flex;flex-direction:column;gap:8px}
