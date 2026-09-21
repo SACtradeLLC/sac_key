@@ -24,6 +24,8 @@
   .top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px}
   .sticky{position:sticky;top:0;z-index:5;background:var(--bg);margin:0 -16px;padding:12px 16px 2px}
   .sticky .top{margin-bottom:10px}
+  .banner{display:flex;align-items:center;justify-content:space-between;gap:8px;background:#fff3cd;color:#5c4400;border:1px solid #f0d27a;border-radius:10px;padding:8px 12px;font-size:13px;margin-bottom:8px}
+  @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .banner{background:#3a3010;color:#ffe08a;border-color:#6b5a1e} }
   .top .actions{display:flex;gap:6px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
   .center{max-width:420px;margin:12vh auto 0}
@@ -167,18 +169,62 @@ function idb() {
     r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
   });
 }
-async function rememberKey(key) {
-  try { const db = await idb(); await new Promise((res, rej) => { const t = db.transaction('keys', 'readwrite'); t.objectStore('keys').put(key, 'main'); t.oncomplete = res; t.onerror = () => rej(t.error); }); S.remembered = true; }
-  catch (e) { console.warn('rememberKey', e); }
+async function idbPut(k, v) { try { const db = await idb(); await new Promise((res, rej) => { const t = db.transaction('keys', 'readwrite'); t.objectStore('keys').put(v, k); t.oncomplete = res; t.onerror = () => rej(t.error); }); return true; } catch (e) { console.warn('idbPut', k, e); return false; } }
+async function idbGet(k) { try { const db = await idb(); return await new Promise((res, rej) => { const r = db.transaction('keys').objectStore('keys').get(k); r.onsuccess = () => res(r.result || null); r.onerror = () => rej(r.error); }); } catch (e) { return null; } }
+async function idbDel(k) { try { const db = await idb(); await new Promise((res, rej) => { const t = db.transaction('keys', 'readwrite'); t.objectStore('keys').delete(k); t.oncomplete = res; t.onerror = () => rej(t.error); }); } catch (e) {} }
+async function rememberKey(key) { if (await idbPut('main', key)) S.remembered = true; }
+async function loadRememberedKey() { return idbGet('main'); }
+async function forgetKey() { await idbDel('main'); S.remembered = false; }
+
+/* ---------- 保存先ファイル（データの本体。Chrome の File System Access API） ---------- */
+const FS_OK = 'showSaveFilePicker' in window && 'showOpenFilePicker' in window;
+const FILE_TYPES = [{ description: 'sac_key のデータ', accept: { 'application/json': ['.sackey'] } }];
+async function fileWriteText(handle, text) { const w = await handle.createWritable(); await w.write(text); await w.close(); }
+async function fileReadText(handle) { const f = await handle.getFile(); return f.text(); }
+async function filePermission(handle, ask) {
+  let p = await handle.queryPermission({ mode: 'readwrite' });
+  if (p === 'prompt' && ask) p = await handle.requestPermission({ mode: 'readwrite' });
+  return p === 'granted';
 }
-async function loadRememberedKey() {
-  try { const db = await idb(); return await new Promise((res, rej) => { const r = db.transaction('keys').objectStore('keys').get('main'); r.onsuccess = () => res(r.result || null); r.onerror = () => rej(r.error); }); }
-  catch (e) { return null; }
+function mergeItems(remote) {
+  let added = 0, updated = 0;
+  for (const it of remote) {
+    const i = S.items.findIndex(x => x.id === it.id);
+    if (i < 0) { S.items.push(it); added++; }
+    else if ((it.updated || '') > (S.items[i].updated || '')) { S.items[i] = it; updated++; }
+  }
+  return { added, updated };
 }
-async function forgetKey() {
-  try { const db = await idb(); await new Promise((res, rej) => { const t = db.transaction('keys', 'readwrite'); t.objectStore('keys').delete('main'); t.oncomplete = res; t.onerror = () => rej(t.error); }); }
-  catch (e) {}
-  S.remembered = false;
+/* ファイルを読んで、ローカルと合わせる（新しい方を採用）。ask=true のときだけ許可ダイアログを出す */
+async function syncFromFile(ask) {
+  if (!S.fileHandle) return;
+  try {
+    if (!(await filePermission(S.fileHandle, ask))) { S.fileStatus = 'prompt'; return; }
+    const text = await fileReadText(S.fileHandle);
+    if (text.trim()) {
+      const blob = JSON.parse(text);
+      if (blob.app !== 'ienokinko') throw new Error('sac_key のファイルではありません');
+      if (!S.key) { saveBlobRaw(blob); S.fileStatus = 'ok'; return; }     // まだ開いていない：保存領域だけ更新
+      let r; try { r = await decryptWithKey(blob, S.key); } catch (e) { S.fileStatus = 'error'; S.fileError = 'ファイルのパスワードが今のパスワードと違います'; return; }
+      const m = mergeItems(r.items);
+      if (m.added || m.updated) toast(`ファイルから 追加 ${m.added}件、更新 ${m.updated}件`);
+    }
+    S.fileStatus = 'ok';
+    await persist();                                                         // ローカルの最新をファイルにも書く
+  } catch (e) { S.fileStatus = 'error'; S.fileError = e.message || String(e); }
+}
+async function attachFile(handle) {
+  S.fileHandle = handle; S.fileStatus = 'ok'; S.fileError = '';
+  await idbPut('file', handle);
+}
+async function detachFile() { S.fileHandle = null; S.fileStatus = 'none'; await idbDel('file'); }
+async function pickNewFile() {
+  const h = await window.showSaveFilePicker({ suggestedName: 'sac_key.sackey', types: FILE_TYPES });
+  await attachFile(h); await persist();
+}
+async function pickExistingFile() {
+  const [h] = await window.showOpenFilePicker({ types: FILE_TYPES, multiple: false });
+  await attachFile(h); await syncFromFile(true);
 }
 
 /* ---------- 保存 ---------- */
@@ -187,11 +233,15 @@ function saveBlobRaw(blob) { localStorage.setItem(STORE_KEY, JSON.stringify(blob
 
 /* ---------- 状態 ---------- */
 const MASK_KEY = 'sackey.mask';
-const S = { mask: (() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch (e) { return false; } })(), key: null, salt: null, iter: PBKDF2_ITER, items: [], remembered: false, view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
+const S = { mask: (() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch (e) { return false; } })(), key: null, salt: null, iter: PBKDF2_ITER, items: [], remembered: false, fileHandle: null, fileStatus: 'none', fileError: '', view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
 
 async function persist() {
   const blob = await encryptItems(S.key, S.salt, S.iter, S.items);
   saveBlobRaw(blob);
+  if (S.fileHandle && S.fileStatus === 'ok') {
+    try { await fileWriteText(S.fileHandle, JSON.stringify(blob)); }
+    catch (e) { S.fileStatus = 'error'; S.fileError = e.message || String(e); toast('ファイルに書けませんでした。設定を見てください'); }
+  }
 }
 async function lock() {
   if (S.remembered) { await forgetKey(); toast('ロックしました。次はパスワードが要ります'); }
@@ -250,7 +300,9 @@ function renderSetup() {
     <div class="err" id="err"></div>
     <button class="primary block" id="go">このパスワードで始める</button>
     <div class="sep"></div>
-    <p class="hint">別のブラウザ（Safari など）で使っていた人は、そちらの sac_key の 設定 → 書き出す で .sackey ファイルを作り、ここで復元してください。</p>
+    <p class="hint">すでに iCloud Drive にファイルがある人（2人目の Mac など）は、ここから開きます。以後はそのファイルに自動で保存されます。</p>
+    ${FS_OK ? `<button class="block" id="fsOpenSetup">iCloud Drive のファイルを開く</button>` : ''}
+    <p class="hint" style="margin-top:12px">別のブラウザ（Safari など）で使っていた人は、そちらの sac_key の 設定 → 書き出す で .sackey ファイルを作り、ここで復元してください。</p>
     <button class="block" id="restore">ファイルから復元する</button>
     <input type="file" id="restoreFile" accept=".sackey,.kagi,.kinko,.json,application/json" hidden>
   </div>`;
@@ -262,6 +314,10 @@ function renderSetup() {
     S.salt = crypto.getRandomValues(new Uint8Array(16)); S.iter = PBKDF2_ITER;
     S.key = await deriveKey(a, S.salt, S.iter); S.items = [];
     await persist(); if ($('#remember').checked) await rememberKey(S.key); render();
+  };
+  if ($('#fsOpenSetup')) $('#fsOpenSetup').onclick = async () => {
+    try { await pickExistingFile(); if (loadBlob()) { toast('開きました。パスワードを入れてください'); render(); } else $('#err').textContent = 'このファイルは空か、読めませんでした'; }
+    catch (e) { if (e.name !== 'AbortError') $('#err').textContent = '開けませんでした: ' + e.message; }
   };
   $('#restore').onclick = () => $('#restoreFile').click();
   $('#restoreFile').onchange = async e => {
@@ -293,6 +349,7 @@ function renderUnlock() {
       const r = await decryptBlob(loadBlob(), pw);
       S.key = r.key; S.salt = r.salt; S.iter = loadBlob().kdf?.iterations || PBKDF2_ITER; S.items = r.items;
       if ($('#remember').checked) await rememberKey(S.key); else await forgetKey();
+      if (S.fileHandle) await syncFromFile(true);
       render();
     } catch (e) {
       $('#err').textContent = 'パスワードが違います'; $('#go').disabled = false; $('#go').textContent = '開ける'; $('#pw').select();
@@ -316,6 +373,12 @@ function topBar(title, backTo) {
     </div>
   </div>`;
 }
+function fileBanner() {
+  if (!S.fileHandle || S.fileStatus === 'ok') return '';
+  if (S.fileStatus === 'prompt') return `<div class="banner"><span>iCloud Drive のファイル（${esc(S.fileHandle.name)}）とまだつながっていません。変更は保存されません。</span><button class="small" id="fsConnect">つなぐ</button></div>`;
+  return `<div class="banner"><span>ファイルに保存できていません：${esc(S.fileError)}</span><button class="small" data-nav="settings">設定へ</button></div>`;
+}
+function wireBanner() { const b = $('#fsConnect'); if (b) b.onclick = async () => { await syncFromFile(true); render(); }; }
 function wireNav(root = app) {
   // 編集画面からの移動は履歴を置き換える（保存や「戻る」のあと、ブラウザの戻るで編集画面に戻らないように）
   $$('[data-nav]', root).forEach(b => b.onclick = () => { const v = b.dataset.nav; nav(v, v === 'detail' ? S.detailId : null, S.view === 'edit'); });
@@ -335,6 +398,7 @@ function renderList() {
   app.innerHTML = `
   <div class="sticky">
   ${topBar('sac_key')}
+  ${fileBanner()}
   <div class="row" style="margin-bottom:8px">
     <input type="search" id="q" placeholder="検索（名前・ID・メモ）" value="${esc(S.q)}">
     <button class="primary" id="add">＋ 追加</button>
@@ -350,7 +414,7 @@ function renderList() {
         <div class="c">${esc(it.category)}</div>
       </div>`).join('') : `<div class="empty">${S.items.length ? '見つかりません' : 'まだ何もありません。「＋ 追加」か、設定の「CSV から取り込む」から始めてください'}</div>`}
   </div>`;
-  wireNav();
+  wireNav(); wireBanner();
   $('#q').oninput = e => { S.q = e.target.value; const pos = e.target.selectionStart; renderList(); const el = $('#q'); el.focus(); el.setSelectionRange(pos, pos); };
   $('#add').onclick = () => nav('edit', 'new');
   $$('[data-cat]').forEach(b => b.onclick = () => { S.cat = b.dataset.cat; render(); });
@@ -478,8 +542,18 @@ function renderSettings() {
   app.innerHTML = `
   <div class="sticky">${topBar('設定', 'list')}</div>
   <div class="card">
+    <h2>保存先（データの本体）</h2>
+    ${!FS_OK ? `<p class="hint">この機能は Chrome で使えます。Safari では下の「書き出す／読み込む」で手動で守ってください。</p>` :
+      !S.fileHandle ? `<p class="hint">いまはこのブラウザの中にだけ保存しています。Chrome の「閲覧履歴データの削除」でサイトデータを消すと一緒に消えます。<br>
+        iCloud Drive に保存先を作ると、追加・変更のたびにそのファイルへ自動で書き込みます。中身は暗号化したままです。</p>
+        <div class="row" style="margin-top:8px"><button class="primary" id="fsNew">保存先を作る（iCloud Drive）</button><button id="fsOpen">既にあるファイルを開く</button></div>` :
+      `<p class="hint">保存先: <b>${esc(S.fileHandle.name)}</b><br>状態: ${S.fileStatus === 'ok' ? 'つながっています。変更は自動でファイルに書き込まれます' : S.fileStatus === 'prompt' ? '未接続（下の「つなぐ」を押してください）' : 'エラー: ' + esc(S.fileError)}</p>
+        <div class="row" style="margin-top:8px">${S.fileStatus === 'ok' ? `<button id="fsSave">今すぐ保存</button>` : `<button class="primary" id="fsConnect2">つなぐ</button>`}<button id="fsOpen">別のファイルを開く</button><button id="fsDetach">接続を外す</button></div>`}
+  </div>
+  <div class="card">
     <h2>ふたりで共有する</h2>
-    <p class="hint">この金庫はこのブラウザの中にだけあります。相手にも同じ中身を渡すには、暗号化したファイルを書き出して送り、相手が読み込みます。ファイルはパスワードがないと開けないので、AirDrop や iCloud Drive で渡して大丈夫です。</p>
+    <p class="hint">保存先を iCloud Drive にしてあれば、相手の Mac の Chrome で sac_key を開き、「既にあるファイルを開く」で同じファイルを選ぶだけです。パスワードは同じものを使います。<br>
+    ファイルを使わない場合は、下の「書き出す」で作ったファイルを渡し、相手が「読み込む」で取り込みます。</p>
     <div class="row">
       <button id="export">書き出す（.sackey）</button>
       <button id="import">読み込む</button>
@@ -531,6 +605,11 @@ function renderSettings() {
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     toast('書き出しました');
   };
+  if ($('#fsNew')) $('#fsNew').onclick = async () => { try { await pickNewFile(); toast('保存先を作りました'); render(); } catch (e) { if (e.name !== 'AbortError') toast('作れませんでした: ' + e.message); } };
+  if ($('#fsOpen')) $('#fsOpen').onclick = async () => { try { await pickExistingFile(); render(); } catch (e) { if (e.name !== 'AbortError') toast('開けませんでした: ' + e.message); } };
+  if ($('#fsSave')) $('#fsSave').onclick = async () => { await persist(); toast(S.fileStatus === 'ok' ? 'ファイルに保存しました' : '保存できませんでした'); render(); };
+  if ($('#fsConnect2')) $('#fsConnect2').onclick = async () => { await syncFromFile(true); render(); };
+  if ($('#fsDetach')) $('#fsDetach').onclick = async () => { if (confirm('ファイルとの接続を外します。ファイル自体は残ります。よろしいですか？')) { await detachFile(); render(); } };
   $('#maskChk').onchange = e => { S.mask = e.target.checked; try { localStorage.setItem(MASK_KEY, S.mask ? '1' : '0'); } catch (err) {} toast(S.mask ? '隠します' : 'そのまま表示します'); };
   const exportPasswords = kind => {
     const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
@@ -585,7 +664,7 @@ function renderSettings() {
   $('#wipe').onclick = () => {
     if (!confirm('この端末の金庫を全部消します。書き出したファイルがないと戻せません。よろしいですか？')) return;
     if (prompt('確認のため「消す」と入力してください') !== '消す') return;
-    localStorage.removeItem(STORE_KEY); forgetKey().then(() => { lock(); toast('消しました'); });
+    localStorage.removeItem(STORE_KEY); Promise.all([forgetKey(), detachFile()]).then(() => { lock(); toast('消しました（iCloud のファイルは残っています）'); });
   };
 }
 
@@ -755,11 +834,13 @@ if (!window.isSecureContext || !crypto.subtle) {
 } else {
   if (!location.hash) location.replace('#list');
   (async () => {
+    if (FS_OK) { const h = await idbGet('file'); if (h) { S.fileHandle = h; S.fileStatus = 'prompt'; await syncFromFile(false); } }
     const blob = loadBlob(), key = blob && await loadRememberedKey();
     if (key) {
       try { const r = await decryptWithKey(blob, key); S.key = r.key; S.salt = r.salt; S.iter = blob.kdf?.iterations || PBKDF2_ITER; S.items = r.items; S.remembered = true; }
       catch (e) { await forgetKey(); }
     }
+    if (S.key && S.fileHandle && S.fileStatus === 'ok') await syncFromFile(false);   // 開けたあと、ファイル側の変更を取り込む
     applyHash();
   })();
 }
