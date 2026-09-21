@@ -99,6 +99,10 @@ const TEMPLATES = {
   'ログイン': [['URL', false], ['ID・メール', false], ['パスワード', true]],
   'その他': [['内容', true]],
 };
+const DEFAULT_FIELDS = [['ID', false], ['パスワード', true]];
+const fieldsFor = cat => (TEMPLATES[cat] || DEFAULT_FIELDS).map(([label, secret]) => ({ label, value: '', secret }));
+const allCats = () => [...new Set([...CATEGORIES, ...S.items.map(i => i.category).filter(Boolean)])];
+const catFromFileName = name => { const m = String(name || '').replace(/\.[^.]+$/, '').split(/\s+-\s+/); return m.length > 1 ? m[m.length - 1].trim() : ''; };
 const SECRET_WORDS = /パスワード|password|pass|pw|暗証|pin|番号|number|no\.|コード|code|セキュリティ|cvv|cvc|秘密|鍵|key|token|トークン/i;
 const TITLE_WORDS = /^(名前|名称|サービス|サービス名|サイト|サイト名|銀行|銀行名|カード|カード会社|項目|タイトル|title|name|site)$/i;
 
@@ -281,7 +285,7 @@ function renderList() {
     <input type="search" id="q" placeholder="検索（名前・ID・メモ）" value="${esc(S.q)}">
     <button class="primary" id="add">＋ 追加</button>
   </div>
-  <div class="tabs">${['すべて', ...CATEGORIES].map(c => `<button class="${c === S.cat ? 'on' : ''}" data-cat="${c}">${c}</button>`).join('')}</div>
+  <div class="tabs">${['すべて', ...allCats()].map(c => `<button class="${c === S.cat ? 'on' : ''}" data-cat="${c}">${c}</button>`).join('')}</div>
   <div class="list">
     ${items.length ? items.map(it => `
       <div class="item" data-id="${it.id}">
@@ -341,14 +345,16 @@ function genPassword(len = 16) {
 }
 function renderEdit() {
   const orig = S.items.find(x => x.id === S.editId);
-  const draft = orig ? JSON.parse(JSON.stringify(orig)) : { id: uid(), category: S.cat !== 'すべて' ? S.cat : 'ログイン', title: '', fields: TEMPLATES[S.cat !== 'すべて' ? S.cat : 'ログイン'].map(([label, secret]) => ({ label, value: '', secret })), memo: '' };
+  const startCat = S.cat !== 'すべて' ? S.cat : 'ログイン';
+  const draft = orig ? JSON.parse(JSON.stringify(orig)) : { id: uid(), category: startCat, title: '', fields: fieldsFor(startCat), memo: '' };
 
   const draw = () => {
     app.innerHTML = `
     ${topBar(orig ? '編集' : '追加', orig ? 'detail' : 'list')}
     <div class="card">
-      <label>種類</label>
-      <select id="cat">${CATEGORIES.map(c => `<option ${c === draft.category ? 'selected' : ''}>${c}</option>`).join('')}</select>
+      <label>種類（一覧から選ぶか、自由に入力。例：携帯契約、情報発信系）</label>
+      <input type="text" id="cat" list="catList" value="${esc(draft.category)}" autocomplete="off">
+      <datalist id="catList">${allCats().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
       <label>名前（例：三井住友銀行、楽天カード、Amazon）</label>
       <input type="text" id="title" value="${esc(draft.title)}" autocomplete="off">
       <label>項目　　<span class="hint">「秘密」にチェックすると隠して表示されます</span></label>
@@ -378,8 +384,7 @@ function renderEdit() {
     $('#cat').onchange = () => {
       sync();
       const filled = draft.fields.some(f => f.value);
-      if (!filled) draft.fields = TEMPLATES[draft.category].map(([label, secret]) => ({ label, value: '', secret }));
-      draw();
+      if (!filled && TEMPLATES[draft.category]) { draft.fields = fieldsFor(draft.category); draw(); }
     };
     $$('.fs').forEach(c => c.onchange = () => { sync(); draw(); });
     $$('.fx').forEach(b => b.onclick = () => { sync(); draft.fields.splice(+b.closest('.frow').dataset.i, 1); draw(); });
@@ -388,6 +393,7 @@ function renderEdit() {
     $('#save').onclick = async () => {
       sync();
       if (!draft.title.trim()) return $('#err').textContent = '名前を入れてください';
+      draft.category = draft.category.trim() || 'その他';
       draft.fields = draft.fields.filter(f => f.label.trim() || f.value.trim());
       draft.updated = now();
       const i = S.items.findIndex(x => x.id === draft.id);
@@ -522,8 +528,9 @@ function renderCsv() {
     const opts = [['title', '名前にする'], ['plain', '項目（そのまま表示）'], ['secret', '項目（秘密・隠す）'], ['memo', 'メモに入れる'], ['skip', '取り込まない']];
     $('#mapArea').innerHTML = `
       <div class="meta">${body.length}行 見つかりました。各列をどう扱うか決めてください。</div>
-      <label>取り込む先の種類</label>
-      <select id="csvCat">${CATEGORIES.map(c => `<option>${c}</option>`).join('')}</select>
+      <label>取り込む先の種類（シート名がそのまま種類になります。変えても OK）</label>
+      <input type="text" id="csvCat" list="csvCatList" value="${esc(catFromFileName(f.name) || 'その他')}" autocomplete="off">
+      <datalist id="csvCatList">${allCats().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
       <table class="map" style="margin-top:10px">
         ${headers.map((h, i) => { const g = guess(h); return `<tr><td>${esc(h)}<div class="hint" style="font-size:12px">例：${esc((body[0][i] || '').slice(0, 20))}${g === 'secret' ? '' : ''}</div></td><td><select class="mapSel" data-i="${i}">${opts.map(([v, l]) => `<option value="${v}" ${v === g ? 'selected' : ''}>${l}</option>`).join('')}</select></td></tr>`; }).join('')}
       </table>
@@ -533,7 +540,7 @@ function renderCsv() {
     $('#doImport').onclick = async () => {
       const map = $$('.mapSel').map(s => s.value);
       if (!map.includes('title')) return $('#cerr').textContent = '「名前にする」列を1つ選んでください';
-      const cat = $('#csvCat').value; let n = 0;
+      const cat = $('#csvCat').value.trim() || 'その他'; let n = 0;
       for (const r of body) {
         const it = { id: uid(), category: cat, title: '', fields: [], memo: '', updated: now() };
         const memos = [];
