@@ -1,0 +1,9 @@
+{
+  "name": "sac_key",
+  "short_name": "sac_key",
+  "start_url": "./index.html",
+  "display": "standalone",
+  "background_color": "#161616",
+  "theme_color": "#1f6f5f",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

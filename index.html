@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <meta name="robots" content="noindex">
 <title>sac_key</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="sac_key">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="theme-color" content="#1f6f5f">
+<script src="config.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
   :root{
     --bg:#f4f4f2; --card:#ffffff; --ink:#1d1d1b; --sub:#6b6b66; --line:#e2e2de;
@@ -240,13 +248,68 @@ async function pickExistingFile() {
   await attachFile(h); await syncFromFile(true);
 }
 
+/* ---------- クラウド（Supabase）：暗号化したまま1行に保存。パスワードは送らない ---------- */
+const CFG = window.SACKEY_CONFIG || {};
+const CLOUD_OK = !!(CFG.url && CFG.anonKey && window.supabase);
+let sb = null;
+async function cloudInit() {
+  if (!CLOUD_OK) return;
+  sb = window.supabase.createClient(CFG.url, CFG.anonKey);
+  try { const { data } = await sb.auth.getSession(); S.cloudUser = data?.session?.user?.email || null; } catch (e) { S.cloudUser = null; }
+}
+async function cloudLogin(email, password) {
+  const { error } = await sb.auth.signInWithPassword({ email, password });
+  if (error) throw error;
+  S.cloudUser = email; S.cloudStatus = 'ok'; S.cloudError = '';
+}
+async function cloudLogout() { try { await sb.auth.signOut(); } catch (e) {} S.cloudUser = null; S.cloudStatus = 'none'; }
+async function cloudPull() {
+  const { data, error } = await sb.from('vault').select('data').eq('id', 'main').maybeSingle();
+  if (error) throw error;
+  return data?.data || null;
+}
+async function cloudPush(blob) {
+  const { error } = await sb.from('vault').upsert({ id: 'main', data: blob, updated_at: now() });
+  if (error) throw error;
+}
+function cloudErrText(e) {
+  const m = (e && (e.message || String(e))) || '';
+  if (/row-level security|permission denied|42501/i.test(m)) return 'このメールはメンバーに入っていません（Supabase の vault_members を確認）';
+  if (/Invalid login/i.test(m)) return 'メールかパスワードが違います';
+  if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return 'ネットにつながっていません';
+  return m;
+}
+/* クラウドと合わせる：読む → マージ → 書く */
+async function syncCloud() {
+  if (!sb || !S.cloudUser || !S.key) return;
+  S.cloudStatus = 'syncing';
+  try {
+    const blob = await cloudPull();
+    if (blob) {
+      if (blob.app !== 'ienokinko') throw new Error('sac_key のデータではありません');
+      let r; try { r = await decryptWithKey(blob, S.key); }
+      catch (e) { S.cloudStatus = 'error'; S.cloudError = 'クラウドのデータは別のパスワードで作られています。設定の「クラウドのデータに合わせる」を押してください'; return; }
+      const m = mergeItems(r.items, r.deleted);
+      if (m.added || m.updated || m.removed) toast(`クラウドと合わせました：追加 ${m.added}・更新 ${m.updated}・削除 ${m.removed}`);
+    }
+    S.cloudStatus = 'ok'; S.cloudError = '';
+    await persist();
+  } catch (e) { S.cloudStatus = 'error'; S.cloudError = cloudErrText(e); }
+}
+/* このブラウザのデータを捨てて、クラウドのデータを採用する（パスワードが違うとき用） */
+async function adoptCloud() {
+  const blob = await cloudPull(); if (!blob) return toast('クラウドにデータがありません');
+  saveBlobRaw(blob); await forgetKey(); S.cloudStatus = 'none';
+  S.key = null; S.items = []; S.deleted = {}; toast('クラウドのデータに合わせました。そのパスワードで開いてください'); nav('list', null, true);
+}
+
 /* ---------- 保存 ---------- */
 function loadBlob() { try { const s = localStorage.getItem(STORE_KEY); return s ? JSON.parse(s) : null; } catch (e) { return null; } }
 function saveBlobRaw(blob) { localStorage.setItem(STORE_KEY, JSON.stringify(blob)); }
 
 /* ---------- 状態 ---------- */
 const MASK_KEY = 'sackey.mask';
-const S = { mask: (() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch (e) { return false; } })(), key: null, salt: null, iter: PBKDF2_ITER, items: [], deleted: {}, remembered: false, fileHandle: null, fileStatus: 'none', fileError: '', view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
+const S = { mask: (() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch (e) { return false; } })(), key: null, salt: null, iter: PBKDF2_ITER, items: [], deleted: {}, remembered: false, cloudUser: null, cloudStatus: 'none', cloudError: '', fileHandle: null, fileStatus: 'none', fileError: '', view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
 
 async function persist() {
   pruneDeleted();
@@ -255,6 +318,10 @@ async function persist() {
   if (S.fileHandle && S.fileStatus === 'ok') {
     try { await fileWriteText(S.fileHandle, JSON.stringify(blob)); }
     catch (e) { S.fileStatus = 'error'; S.fileError = e.message || String(e); toast('ファイルに書けませんでした。設定を見てください'); }
+  }
+  if (sb && S.cloudUser && S.cloudStatus !== 'error') {
+    try { await cloudPush(blob); S.cloudStatus = 'ok'; }
+    catch (e) { S.cloudStatus = 'error'; S.cloudError = cloudErrText(e); toast('クラウドに保存できませんでした：' + S.cloudError); }
   }
 }
 async function lock() {
@@ -303,8 +370,10 @@ function render() {
 /* 初回：パスワードを決める */
 function renderSetup() {
   app.innerHTML = `
-  <div class="card center">
-    <h1>sac_key</h1>
+  <div class="center">
+  ${CLOUD_OK && !S.cloudUser ? cloudCard(true).replace('<h2>クラウドにログイン</h2>', '<h1>sac_key</h1><h2 style="margin-top:8px">クラウドにログイン</h2>') : ''}
+  <div class="card">
+    ${CLOUD_OK && !S.cloudUser ? '<h2>はじめて使う（新しく作る）</h2>' : '<h1>sac_key</h1>'}
     <p class="hint">はじめに、sac_key を開くパスワードを決めます。忘れると開けられないので、控えておいてください。</p>
     <label>パスワード（8文字以上）</label>
     <input type="password" id="pw1" autocomplete="new-password">
@@ -319,7 +388,9 @@ function renderSetup() {
     <p class="hint" style="margin-top:12px">別のブラウザ（Safari など）で使っていた人は、そちらの sac_key の 設定 → 書き出す で .sackey ファイルを作り、ここで復元してください。</p>
     <button class="block" id="restore">ファイルから復元する</button>
     <input type="file" id="restoreFile" accept=".sackey,.kagi,.kinko,.json,application/json" hidden>
+  </div>
   </div>`;
+  wireCloud(async () => { const blob = await cloudPull(); if (blob) { saveBlobRaw(blob); toast('クラウドのデータを受け取りました。パスワードを入れてください'); } });
   $('#go').onclick = async () => {
     const a = $('#pw1').value, b = $('#pw2').value;
     if (a.length < 8) return $('#err').textContent = '8文字以上にしてください';
@@ -355,15 +426,25 @@ function renderUnlock() {
     <label class="chk" style="margin-top:12px"><input type="checkbox" id="remember" checked> 次回からパスワードなしで開く（このブラウザだけ）</label>
     <div class="err" id="err"></div>
     <button class="primary block" id="go">開ける</button>
-  </div>`;
+  </div>
+  ${CLOUD_OK && !S.cloudUser ? '<div class="center" style="margin-top:12px">' + cloudCard(true) + '</div>' : ''}`;
+  wireCloud();
   const go = async () => {
     const pw = $('#pw').value; if (!pw) return;
     $('#go').disabled = true; $('#go').textContent = '確認中…';
     try {
-      const r = await decryptBlob(loadBlob(), pw);
-      S.key = r.key; S.salt = r.salt; S.iter = loadBlob().kdf?.iterations || PBKDF2_ITER; S.items = r.items; S.deleted = r.deleted;
+      let r, src = loadBlob();
+      try { r = await decryptBlob(src, pw); }
+      catch (e1) {
+        // このブラウザのデータでは開けない → クラウドのデータで試す（パスワードを変えた後など）
+        const cb = (sb && S.cloudUser) ? await cloudPull().catch(() => null) : null;
+        if (!cb) throw e1;
+        r = await decryptBlob(cb, pw); src = cb; saveBlobRaw(cb);
+      }
+      S.key = r.key; S.salt = r.salt; S.iter = src.kdf?.iterations || PBKDF2_ITER; S.items = r.items; S.deleted = r.deleted;
       if ($('#remember').checked) await rememberKey(S.key); else await forgetKey();
       if (S.fileHandle) await syncFromFile(true);
+      await syncCloud();
       render();
     } catch (e) {
       $('#err').textContent = 'パスワードが違います'; $('#go').disabled = false; $('#go').textContent = '開ける'; $('#pw').select();
@@ -382,10 +463,42 @@ function topBar(title, backTo) {
       <h1>${esc(title)}</h1>
     </div>
     <div class="actions">
+      ${backTo ? '' : (CLOUD_OK && S.cloudUser ? `<button class="small" id="syncBtn" title="クラウドと合わせる">${S.cloudStatus === 'syncing' ? '…' : '↻'}</button>` : '')}
       ${backTo ? '' : `<button class="small" data-nav="settings">設定</button>`}
       <button class="small" id="lockBtn">ロック</button>
     </div>
   </div>`;
+}
+function cloudCard(compact) {
+  if (!CLOUD_OK) return compact ? '' : `<div class="card"><h2>クラウド（Supabase）</h2><p class="hint">まだ設定されていません。config.js に Project URL と anon キーを入れると、iPhone や2台目の Mac と自動で同期できます。</p></div>`;
+  if (S.cloudUser) return compact ? '' : `<div class="card"><h2>クラウド（Supabase）</h2>
+    <p class="hint">ログイン中: <b>${esc(S.cloudUser)}</b><br>状態: ${S.cloudStatus === 'ok' ? '同期しています。変更は自動でクラウドに保存されます' : S.cloudStatus === 'syncing' ? '同期中…' : S.cloudStatus === 'error' ? 'エラー: ' + esc(S.cloudError) : '開くと同期します'}</p>
+    <div class="row" style="margin-top:8px"><button id="cloudSync">今すぐ同期</button>${S.cloudStatus === 'error' ? `<button id="cloudAdopt">クラウドのデータに合わせる</button>` : ''}<button id="cloudLogout">ログアウト</button></div></div>`;
+  return `<div class="card"><h2>${compact ? 'クラウドにログイン' : 'クラウド（Supabase）'}</h2>
+    <p class="hint">${compact ? 'iPhone や別の Mac と同じデータを使うには、ここでログインします。' : 'ログインすると、変更のたびにクラウド（暗号化したまま）へ保存し、他の端末と合わせます。'}</p>
+    <label>メール</label><input type="text" id="cloudEmail" autocomplete="username" inputmode="email">
+    <label>パスワード（クラウドのログイン用。sac_key のパスワードとは別）</label><input type="password" id="cloudPw" autocomplete="current-password">
+    <div class="err" id="cloudErr"></div>
+    <button class="primary block" id="cloudLoginBtn">ログイン</button></div>`;
+}
+function wireCloud(after) {
+  const b = $('#cloudLoginBtn');
+  if (b) b.onclick = async () => {
+    const email = $('#cloudEmail').value.trim(), pw = $('#cloudPw').value;
+    if (!email || !pw) return $('#cloudErr').textContent = 'メールとパスワードを入れてください';
+    b.disabled = true; b.textContent = 'ログイン中…';
+    try { await cloudLogin(email, pw); toast('ログインしました'); if (after) await after(); render(); }
+    catch (e) { $('#cloudErr').textContent = cloudErrText(e); b.disabled = false; b.textContent = 'ログイン'; }
+  };
+  if ($('#cloudSync')) $('#cloudSync').onclick = async () => { await syncCloud(); render(); toast(S.cloudStatus === 'ok' ? '同期しました' : '同期できませんでした'); };
+  if ($('#cloudAdopt')) $('#cloudAdopt').onclick = async () => { if (confirm('このブラウザの分を捨てて、クラウドのデータに合わせます。よろしいですか？')) await adoptCloud(); };
+  if ($('#cloudLogout')) $('#cloudLogout').onclick = async () => { await cloudLogout(); render(); };
+}
+function cloudBanner() {
+  if (!CLOUD_OK) return '';
+  if (!S.cloudUser) return `<div class="banner"><span>クラウドにログインしていません。他の端末と合いません。</span><button class="small" data-nav="settings">ログイン</button></div>`;
+  if (S.cloudStatus === 'error') return `<div class="banner"><span>クラウドと合わせられません：${esc(S.cloudError)}</span><button class="small" data-nav="settings">設定へ</button></div>`;
+  return '';
 }
 function fileBanner() {
   if (!S.fileHandle || S.fileStatus === 'ok') return '';
@@ -397,6 +510,7 @@ function wireNav(root = app) {
   // 編集画面からの移動は履歴を置き換える（保存や「戻る」のあと、ブラウザの戻るで編集画面に戻らないように）
   $$('[data-nav]', root).forEach(b => b.onclick = () => { const v = b.dataset.nav; nav(v, v === 'detail' ? S.detailId : null, S.view === 'edit'); });
   const l = $('#lockBtn', root); if (l) l.onclick = lock;
+  const sy = $('#syncBtn', root); if (sy) sy.onclick = async () => { await syncCloud(); render(); };
 }
 function summaryOf(it) {
   const f = it.fields.find(x => !x.secret && x.value); return f ? f.value : '';
@@ -412,6 +526,7 @@ function renderList() {
   app.innerHTML = `
   <div class="sticky">
   ${topBar('sac_key')}
+  ${cloudBanner()}
   ${fileBanner()}
   <div class="row" style="margin-bottom:8px">
     <input type="search" id="q" placeholder="検索（名前・ID・メモ）" value="${esc(S.q)}">
@@ -555,8 +670,9 @@ function renderEdit() {
 function renderSettings() {
   app.innerHTML = `
   <div class="sticky">${topBar('設定', 'list')}</div>
+  ${cloudCard(false)}
   <div class="card">
-    <h2>保存先（データの本体）</h2>
+    <h2>保存先（iCloud Drive のファイル）</h2>
     ${!FS_OK ? `<p class="hint">この機能は Chrome で使えます。Safari では下の「書き出す／読み込む」で手動で守ってください。</p>` :
       !S.fileHandle ? `<p class="hint">いまはこのブラウザの中にだけ保存しています。Chrome の「閲覧履歴データの削除」でサイトデータを消すと一緒に消えます。<br>
         iCloud Drive に保存先を作ると、追加・変更のたびにそのファイルへ自動で書き込みます。中身は暗号化したままです。</p>
@@ -614,6 +730,7 @@ function renderSettings() {
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     toast('書き出しました');
   };
+  wireCloud();
   if ($('#fsNew')) $('#fsNew').onclick = async () => { try { await pickNewFile(); toast('保存先を作りました'); render(); } catch (e) { if (e.name !== 'AbortError') toast('作れませんでした: ' + e.message); } };
   if ($('#fsOpen')) $('#fsOpen').onclick = async () => { try { await pickExistingFile(); render(); } catch (e) { if (e.name !== 'AbortError') toast('開けませんでした: ' + e.message); } };
   if ($('#fsSave')) $('#fsSave').onclick = async () => { await persist(); toast(S.fileStatus === 'ok' ? 'ファイルに保存しました' : '保存できませんでした'); render(); };
@@ -833,6 +950,8 @@ if (!window.isSecureContext || !crypto.subtle) {
 } else {
   if (!location.hash) location.replace('#list');
   (async () => {
+    await cloudInit();
+    if (sb && S.cloudUser && !loadBlob()) { try { const cb = await cloudPull(); if (cb) saveBlobRaw(cb); } catch (e) { S.cloudStatus = 'error'; S.cloudError = cloudErrText(e); } }
     if (FS_OK) { const h = await idbGet('file'); if (h) { S.fileHandle = h; S.fileStatus = 'prompt'; await syncFromFile(false); } }
     const blob = loadBlob(), key = blob && await loadRememberedKey();
     if (key) {
@@ -840,7 +959,10 @@ if (!window.isSecureContext || !crypto.subtle) {
       catch (e) { await forgetKey(); }
     }
     if (S.key && S.fileHandle && S.fileStatus === 'ok') await syncFromFile(false);   // 開けたあと、ファイル側の変更を取り込む
+    if (S.key) await syncCloud();
     applyHash();
+    // 画面に戻ってきたとき（iPhone で切り替えたあと など）も合わせる
+    document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && S.key && sb && S.cloudUser) { await syncCloud(); if (S.view === 'list') render(); } });
   })();
 }
 </script>
