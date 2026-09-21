@@ -86,7 +86,7 @@
 /* =========================================================
    sac_key — 1ファイルで動く、家族2人用のパスワード・口座管理
    ・データはこのブラウザの中（localStorage）に AES-GCM で暗号化して保存
-   ・鍵はマスターパスワードから PBKDF2 で作る。平文はどこにも書かない
+   ・鍵はパスワードから PBKDF2 で作る。平文はどこにも書かない
    ・共有は「書き出し（暗号化ファイル）→ 相手が読み込み」で行う
    ========================================================= */
 
@@ -149,12 +149,36 @@ async function encryptItems(key, salt, iterations, items) {
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
   return { app: 'ienokinko', v: 1, kdf: { name: 'PBKDF2-SHA256', iterations }, salt: b64(salt), iv: b64(iv), data: b64(new Uint8Array(ct)), savedAt: now() };
 }
-async function decryptBlob(blob, password) {
-  const salt = unb64(blob.salt);
-  const key = await deriveKey(password, salt, blob.kdf?.iterations || PBKDF2_ITER);
+async function decryptWithKey(blob, key) {
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(blob.iv) }, key, unb64(blob.data));
   const obj = JSON.parse(new TextDecoder().decode(pt));
-  return { key, salt, items: obj.items || [] };
+  return { key, salt: unb64(blob.salt), items: obj.items || [] };
+}
+async function decryptBlob(blob, password) {
+  const key = await deriveKey(password, unb64(blob.salt), blob.kdf?.iterations || PBKDF2_ITER);
+  return decryptWithKey(blob, key);
+}
+
+/* 鍵の記憶：鍵そのもの（取り出せない形）をブラウザの IndexedDB に置く。パスワードは保存しない */
+function idb() {
+  return new Promise((res, rej) => {
+    const r = indexedDB.open('sackey', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('keys');
+    r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
+  });
+}
+async function rememberKey(key) {
+  try { const db = await idb(); await new Promise((res, rej) => { const t = db.transaction('keys', 'readwrite'); t.objectStore('keys').put(key, 'main'); t.oncomplete = res; t.onerror = () => rej(t.error); }); S.remembered = true; }
+  catch (e) { console.warn('rememberKey', e); }
+}
+async function loadRememberedKey() {
+  try { const db = await idb(); return await new Promise((res, rej) => { const r = db.transaction('keys').objectStore('keys').get('main'); r.onsuccess = () => res(r.result || null); r.onerror = () => rej(r.error); }); }
+  catch (e) { return null; }
+}
+async function forgetKey() {
+  try { const db = await idb(); await new Promise((res, rej) => { const t = db.transaction('keys', 'readwrite'); t.objectStore('keys').delete('main'); t.oncomplete = res; t.onerror = () => rej(t.error); }); }
+  catch (e) {}
+  S.remembered = false;
 }
 
 /* ---------- 保存 ---------- */
@@ -163,13 +187,14 @@ function saveBlobRaw(blob) { localStorage.setItem(STORE_KEY, JSON.stringify(blob
 
 /* ---------- 状態 ---------- */
 const MASK_KEY = 'sackey.mask';
-const S = { mask: (() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch (e) { return false; } })(), key: null, salt: null, iter: PBKDF2_ITER, items: [], view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
+const S = { mask: (() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch (e) { return false; } })(), key: null, salt: null, iter: PBKDF2_ITER, items: [], remembered: false, view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
 
 async function persist() {
   const blob = await encryptItems(S.key, S.salt, S.iter, S.items);
   saveBlobRaw(blob);
 }
-function lock() {
+async function lock() {
+  if (S.remembered) { await forgetKey(); toast('ロックしました。次はパスワードが要ります'); }
   S.key = null; S.salt = null; S.items = []; S.view = 'list'; S.detailId = null; S.editId = null; S.shown.clear();
   nav('list', null, true);
 }
@@ -194,7 +219,7 @@ window.addEventListener('hashchange', applyHash);
 let idleTimer;
 function bumpIdle() {
   clearTimeout(idleTimer);
-  if (S.key) idleTimer = setTimeout(() => { lock(); toast('しばらく操作がなかったのでロックしました'); }, IDLE_LOCK_MS);
+  if (S.key && !S.remembered) idleTimer = setTimeout(() => { lock(); toast('しばらく操作がなかったのでロックしました'); }, IDLE_LOCK_MS);
 }
 ['pointerdown', 'keydown', 'touchstart'].forEach(ev => document.addEventListener(ev, bumpIdle, { passive: true }));
 
@@ -211,19 +236,19 @@ function render() {
   return renderList();
 }
 
-/* 初回：マスターパスワードを決める */
+/* 初回：パスワードを決める */
 function renderSetup() {
   app.innerHTML = `
   <div class="card center">
     <h1>sac_key</h1>
-    <p class="hint">はじめに、ふたりで共有する「マスターパスワード」を決めます。<br>
-    これ1つで全部の鍵が開きます。忘れると誰にも開けられないので、紙にも控えてください。</p>
-    <label>マスターパスワード（12文字以上をおすすめ）</label>
+    <p class="hint">はじめに、sac_key を開くパスワードを決めます。忘れると開けられないので、控えておいてください。</p>
+    <label>パスワード（8文字以上）</label>
     <input type="password" id="pw1" autocomplete="new-password">
     <label>もう一度</label>
     <input type="password" id="pw2" autocomplete="new-password">
+    <label class="chk" style="margin-top:12px"><input type="checkbox" id="remember" checked> 次回からパスワードなしで開く（このブラウザだけ）</label>
     <div class="err" id="err"></div>
-    <button class="primary block" id="go">この合言葉で金庫を作る</button>
+    <button class="primary block" id="go">このパスワードで始める</button>
     <div class="sep"></div>
     <p class="hint">別のブラウザ（Safari など）で使っていた人は、そちらの sac_key の 設定 → 書き出す で .sackey ファイルを作り、ここで復元してください。</p>
     <button class="block" id="restore">ファイルから復元する</button>
@@ -236,7 +261,7 @@ function renderSetup() {
     $('#go').disabled = true; $('#go').textContent = '鍵を作っています…';
     S.salt = crypto.getRandomValues(new Uint8Array(16)); S.iter = PBKDF2_ITER;
     S.key = await deriveKey(a, S.salt, S.iter); S.items = [];
-    await persist(); render();
+    await persist(); if ($('#remember').checked) await rememberKey(S.key); render();
   };
   $('#restore').onclick = () => $('#restoreFile').click();
   $('#restoreFile').onchange = async e => {
@@ -244,7 +269,7 @@ function renderSetup() {
     try {
       const blob = JSON.parse(await f.text());
       if (blob.app !== 'ienokinko') throw new Error();
-      saveBlobRaw(blob); toast('復元しました。合言葉を入れてください'); render();
+      saveBlobRaw(blob); toast('復元しました。パスワードを入れてください'); render();
     } catch (err) { $('#err').textContent = 'このファイルは読めませんでした'; }
   };
   $('#pw1').focus();
@@ -255,8 +280,9 @@ function renderUnlock() {
   app.innerHTML = `
   <div class="card center">
     <h1>sac_key</h1>
-    <label>マスターパスワード</label>
+    <label>パスワード</label>
     <input type="password" id="pw" autocomplete="current-password">
+    <label class="chk" style="margin-top:12px"><input type="checkbox" id="remember" checked> 次回からパスワードなしで開く（このブラウザだけ）</label>
     <div class="err" id="err"></div>
     <button class="primary block" id="go">開ける</button>
   </div>`;
@@ -266,9 +292,10 @@ function renderUnlock() {
     try {
       const r = await decryptBlob(loadBlob(), pw);
       S.key = r.key; S.salt = r.salt; S.iter = loadBlob().kdf?.iterations || PBKDF2_ITER; S.items = r.items;
+      if ($('#remember').checked) await rememberKey(S.key); else await forgetKey();
       render();
     } catch (e) {
-      $('#err').textContent = '合言葉が違います'; $('#go').disabled = false; $('#go').textContent = '開ける'; $('#pw').select();
+      $('#err').textContent = 'パスワードが違います'; $('#go').disabled = false; $('#go').textContent = '開ける'; $('#pw').select();
     }
   };
   $('#go').onclick = go;
@@ -452,7 +479,7 @@ function renderSettings() {
   <div class="sticky">${topBar('設定', 'list')}</div>
   <div class="card">
     <h2>ふたりで共有する</h2>
-    <p class="hint">この金庫はこのブラウザの中にだけあります。相手にも同じ中身を渡すには、暗号化したファイルを書き出して送り、相手が読み込みます。ファイルは合言葉がないと開けないので、AirDrop や iCloud Drive で渡して大丈夫です。</p>
+    <p class="hint">この金庫はこのブラウザの中にだけあります。相手にも同じ中身を渡すには、暗号化したファイルを書き出して送り、相手が読み込みます。ファイルはパスワードがないと開けないので、AirDrop や iCloud Drive で渡して大丈夫です。</p>
     <div class="row">
       <button id="export">書き出す（.sackey）</button>
       <button id="import">読み込む</button>
@@ -481,8 +508,8 @@ function renderSettings() {
     <label class="chk"><input type="checkbox" id="maskChk" ${S.mask ? 'checked' : ''}> 秘密の項目を ●●● で隠す（「表示」ボタンで見る）</label>
   </div>
   <div class="card">
-    <h2>合言葉を変える</h2>
-    <label>新しいマスターパスワード</label>
+    <h2>パスワードを変える</h2>
+    <label>新しいパスワード</label>
     <input type="password" id="np1" autocomplete="new-password">
     <label>もう一度</label>
     <input type="password" id="np2" autocomplete="new-password">
@@ -495,7 +522,7 @@ function renderSettings() {
     <p class="hint">書き出したファイルがあれば、あとで「ファイルから復元する」で戻せます。</p>
     <button class="danger block" id="wipe">この端末の金庫を全部消す</button>
   </div>
-  <div class="meta">登録件数 ${S.items.length}件 ／ 5分さわらないと自動でロックします</div>`;
+  <div class="meta">登録件数 ${S.items.length}件 ／ ${S.remembered ? 'このブラウザではパスワードなしで開きます。「ロック」を押すと次回はパスワードが要ります' : '5分さわらないと自動でロックします'}</div>`;
   wireNav();
   $('#export').onclick = async () => {
     await persist();
@@ -529,9 +556,9 @@ function renderSettings() {
   $('#importFile').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
     let blob; try { blob = JSON.parse(await f.text()); if (blob.app !== 'ienokinko') throw 0; } catch (err) { return toast('このファイルは読めませんでした'); }
-    const pw = prompt('そのファイルを作ったときの合言葉を入れてください');
+    const pw = prompt('そのファイルを作ったときのパスワードを入れてください');
     if (pw == null) return;
-    let r; try { r = await decryptBlob(blob, pw); } catch (err) { return toast('合言葉が違います'); }
+    let r; try { r = await decryptBlob(blob, pw); } catch (err) { return toast('パスワードが違います'); }
     if ($('#replace').checked) {
       if (!confirm(`今の ${S.items.length}件を消して、ファイルの ${r.items.length}件に置き換えます。よろしいですか？`)) return;
       S.items = r.items;
@@ -552,12 +579,13 @@ function renderSettings() {
     if (a !== b) return $('#perr').textContent = '2つが一致しません';
     S.salt = crypto.getRandomValues(new Uint8Array(16)); S.iter = PBKDF2_ITER;
     S.key = await deriveKey(a, S.salt, S.iter); await persist();
-    $('#np1').value = $('#np2').value = ''; toast('合言葉を変えました');
+    if (S.remembered) await rememberKey(S.key);
+    $('#np1').value = $('#np2').value = ''; toast('パスワードを変えました');
   };
   $('#wipe').onclick = () => {
     if (!confirm('この端末の金庫を全部消します。書き出したファイルがないと戻せません。よろしいですか？')) return;
     if (prompt('確認のため「消す」と入力してください') !== '消す') return;
-    localStorage.removeItem(STORE_KEY); lock(); toast('消しました');
+    localStorage.removeItem(STORE_KEY); forgetKey().then(() => { lock(); toast('消しました'); });
   };
 }
 
@@ -726,7 +754,14 @@ if (!window.isSecureContext || !crypto.subtle) {
   app.innerHTML = `<div class="card center"><h1>sac_key</h1><p class="hint">このブラウザでは暗号化機能が使えません。Safari か Chrome でファイルを直接開いてください。</p></div>`;
 } else {
   if (!location.hash) location.replace('#list');
-  applyHash();
+  (async () => {
+    const blob = loadBlob(), key = blob && await loadRememberedKey();
+    if (key) {
+      try { const r = await decryptWithKey(blob, key); S.key = r.key; S.salt = r.salt; S.iter = blob.kdf?.iterations || PBKDF2_ITER; S.items = r.items; S.remembered = true; }
+      catch (e) { await forgetKey(); }
+    }
+    applyHash();
+  })();
 }
 </script>
 </body>
