@@ -104,7 +104,9 @@ const fieldsFor = cat => (TEMPLATES[cat] || DEFAULT_FIELDS).map(([label, secret]
 const allCats = () => [...new Set([...CATEGORIES, ...S.items.map(i => i.category).filter(Boolean)])];
 const catFromFileName = name => { const m = String(name || '').replace(/\.[^.]+$/, '').split(/\s+-\s+/); return m.length > 1 ? m[m.length - 1].trim() : ''; };
 const SECRET_WORDS = /パスワード|password|pass|pw|ＰＷ|暗証|pin|番号|number|no\.|コード|code|セキュリティ|cvv|cvc|秘密|鍵|key|token|トークン|期限|認証/i;
-const TITLE_WORDS = /^(名前|名称|サービス|サービス名|サイト|サイト名|銀行|銀行名|カード|カード会社|項目|タイトル|title|name|site)$/i;
+const TITLE_WORDS = /名前|名称|サービス|口座名|サイト|銀行名|カード会社|項目名|タイトル|title|name|site/i;
+const CAT_WORDS = /^(分類|種類|カテゴリ|カテゴリー|category|type)$/i;
+const MEMO_WORDS = /メモ|備考|note|memo|元シート|出典|source/i;
 
 /* ---------- 小道具 ---------- */
 const $ = (sel, el = document) => el.querySelector(sel);
@@ -285,7 +287,7 @@ function renderList() {
     <input type="search" id="q" placeholder="検索（名前・ID・メモ）" value="${esc(S.q)}">
     <button class="primary" id="add">＋ 追加</button>
   </div>
-  <div class="tabs">${['すべて', ...allCats()].map(c => `<button class="${c === S.cat ? 'on' : ''}" data-cat="${c}">${c}</button>`).join('')}</div>
+  <div class="tabs">${['すべて', ...(S.items.length ? [...new Set(S.items.map(i => i.category).filter(Boolean))] : CATEGORIES)].map(c => `<button class="${c === S.cat ? 'on' : ''}" data-cat="${c}">${c}</button>`).join('')}</div>
   <div class="list">
     ${items.length ? items.map(it => `
       <div class="item" data-id="${it.id}">
@@ -579,15 +581,17 @@ function renderCsv() {
     const body = rows.slice(1);
     let titleGuessed = false;
     const guess = h => {
-      if (!titleGuessed && TITLE_WORDS.test(h.trim())) { titleGuessed = true; return 'title'; }
-      if (/メモ|備考|note|memo/i.test(h)) return 'memo';
-      if (SECRET_WORDS.test(h)) return 'secret';
+      h = h.trim();
+      if (CAT_WORDS.test(h)) return 'cat';
+      if (!titleGuessed && TITLE_WORDS.test(h)) { titleGuessed = true; return 'title'; }
+      if (MEMO_WORDS.test(h)) return 'memo';
+      if (SECRET_WORDS.test(h) || /その他の情報|その他情報/.test(h)) return 'secret';
       return 'plain';
     };
-    const opts = [['title', '名前にする'], ['plain', '項目（そのまま表示）'], ['secret', '項目（秘密・隠す）'], ['memo', 'メモに入れる'], ['skip', '取り込まない']];
+    const opts = [['title', '名前にする'], ['cat', '種類にする（行ごとに分ける）'], ['plain', '項目（そのまま表示）'], ['secret', '項目（秘密・隠す）'], ['memo', 'メモに入れる'], ['skip', '取り込まない']];
     $('#mapArea').innerHTML = `
       <div class="meta">${body.length}行 見つかりました。各列をどう扱うか決めてください。</div>
-      <label>取り込む先の種類（シート名がそのまま種類になります。変えても OK）</label>
+      <label>取り込む先の種類（「種類にする」列がある行はそちらを優先。ない行に付ける種類）</label>
       <input type="text" id="csvCat" list="csvCatList" value="${esc(defaultCat)}" autocomplete="off">
       <datalist id="csvCatList">${allCats().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
       <table class="map" style="margin-top:10px">
@@ -595,7 +599,7 @@ function renderCsv() {
       </table>
       <div class="err" id="cerr"></div>
       <button class="primary block" id="doImport">この設定で取り込む</button>`;
-    if (!titleGuessed) $$('.mapSel')[0].value = 'title';
+    if (!titleGuessed) { const first = $$('.mapSel').find(s => s.value !== 'cat'); if (first) first.value = 'title'; }
     $('#doImport').onclick = async () => {
       const map = $$('.mapSel').map(s => s.value);
       if (!map.includes('title')) return $('#cerr').textContent = '「名前にする」列を1つ選んでください';
@@ -607,6 +611,7 @@ function renderCsv() {
           v = (v || '').trim(); if (!v || !headers[i]) return;
           const m = map[i] || 'skip';
           if (m === 'title') it.title = it.title ? it.title + ' ' + v : v;
+          else if (m === 'cat') it.category = v;
           else if (m === 'memo') memos.push(v);
           else if (m === 'plain') it.fields.push({ label: headers[i], value: v, secret: false });
           else if (m === 'secret') it.fields.push({ label: headers[i], value: v, secret: true });
