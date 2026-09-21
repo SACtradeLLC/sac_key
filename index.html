@@ -145,16 +145,16 @@ async function deriveKey(password, salt, iterations) {
     { name: 'PBKDF2', salt, iterations, hash: 'SHA-256' },
     base, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
 }
-async function encryptItems(key, salt, iterations, items) {
+async function encryptItems(key, salt, iterations, items, deleted = {}) {
   const iv = crypto.getRandomValues(new Uint8Array(12));
-  const data = new TextEncoder().encode(JSON.stringify({ items }));
+  const data = new TextEncoder().encode(JSON.stringify({ items, deleted }));
   const ct = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, data);
   return { app: 'ienokinko', v: 1, kdf: { name: 'PBKDF2-SHA256', iterations }, salt: b64(salt), iv: b64(iv), data: b64(new Uint8Array(ct)), savedAt: now() };
 }
 async function decryptWithKey(blob, key) {
   const pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64(blob.iv) }, key, unb64(blob.data));
   const obj = JSON.parse(new TextDecoder().decode(pt));
-  return { key, salt: unb64(blob.salt), items: obj.items || [] };
+  return { key, salt: unb64(blob.salt), items: obj.items || [], deleted: obj.deleted || {} };
 }
 async function decryptBlob(blob, password) {
   const key = await deriveKey(password, unb64(blob.salt), blob.kdf?.iterations || PBKDF2_ITER);
@@ -186,14 +186,27 @@ async function filePermission(handle, ask) {
   if (p === 'prompt' && ask) p = await handle.requestPermission({ mode: 'readwrite' });
   return p === 'granted';
 }
-function mergeItems(remote) {
-  let added = 0, updated = 0;
+/* 消した記録（id → 消した日時）。相手の控えから復活しないように、ファイルにも残す。180日で掃除 */
+function markDeleted(id) { S.deleted[id] = now(); }
+function pruneDeleted() {
+  const limit = new Date(Date.now() - 180 * 24 * 3600 * 1000).toISOString();
+  for (const id of Object.keys(S.deleted)) if (S.deleted[id] < limit) delete S.deleted[id];
+}
+function mergeItems(remote, remoteDeleted = {}) {
+  let added = 0, updated = 0, removed = 0;
+  // 相手が消した記録を取り込む（こちらの項目が、消した時刻より古ければ消す）
+  for (const [id, t] of Object.entries(remoteDeleted)) {
+    if (!S.deleted[id] || S.deleted[id] < t) S.deleted[id] = t;
+    const i = S.items.findIndex(x => x.id === id);
+    if (i >= 0 && (S.items[i].updated || '') <= t) { S.items.splice(i, 1); removed++; }
+  }
   for (const it of remote) {
+    if (S.deleted[it.id] && (it.updated || '') <= S.deleted[it.id]) continue;   // こちらで消した項目は戻さない
     const i = S.items.findIndex(x => x.id === it.id);
     if (i < 0) { S.items.push(it); added++; }
     else if ((it.updated || '') > (S.items[i].updated || '')) { S.items[i] = it; updated++; }
   }
-  return { added, updated };
+  return { added, updated, removed };
 }
 /* ファイルを読んで、ローカルと合わせる（新しい方を採用）。ask=true のときだけ許可ダイアログを出す */
 async function syncFromFile(ask) {
@@ -206,8 +219,8 @@ async function syncFromFile(ask) {
       if (blob.app !== 'ienokinko') throw new Error('sac_key のファイルではありません');
       if (!S.key) { saveBlobRaw(blob); S.fileStatus = 'ok'; return; }     // まだ開いていない：保存領域だけ更新
       let r; try { r = await decryptWithKey(blob, S.key); } catch (e) { S.fileStatus = 'error'; S.fileError = 'ファイルのパスワードが今のパスワードと違います'; return; }
-      const m = mergeItems(r.items);
-      if (m.added || m.updated) toast(`ファイルから 追加 ${m.added}件、更新 ${m.updated}件`);
+      const m = mergeItems(r.items, r.deleted);
+      if (m.added || m.updated || m.removed) toast(`ファイルと合わせました：追加 ${m.added}・更新 ${m.updated}・削除 ${m.removed}`);
     }
     S.fileStatus = 'ok';
     await persist();                                                         // ローカルの最新をファイルにも書く
@@ -233,10 +246,11 @@ function saveBlobRaw(blob) { localStorage.setItem(STORE_KEY, JSON.stringify(blob
 
 /* ---------- 状態 ---------- */
 const MASK_KEY = 'sackey.mask';
-const S = { mask: (() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch (e) { return false; } })(), key: null, salt: null, iter: PBKDF2_ITER, items: [], remembered: false, fileHandle: null, fileStatus: 'none', fileError: '', view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
+const S = { mask: (() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch (e) { return false; } })(), key: null, salt: null, iter: PBKDF2_ITER, items: [], deleted: {}, remembered: false, fileHandle: null, fileStatus: 'none', fileError: '', view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
 
 async function persist() {
-  const blob = await encryptItems(S.key, S.salt, S.iter, S.items);
+  pruneDeleted();
+  const blob = await encryptItems(S.key, S.salt, S.iter, S.items, S.deleted);
   saveBlobRaw(blob);
   if (S.fileHandle && S.fileStatus === 'ok') {
     try { await fileWriteText(S.fileHandle, JSON.stringify(blob)); }
@@ -347,7 +361,7 @@ function renderUnlock() {
     $('#go').disabled = true; $('#go').textContent = '確認中…';
     try {
       const r = await decryptBlob(loadBlob(), pw);
-      S.key = r.key; S.salt = r.salt; S.iter = loadBlob().kdf?.iterations || PBKDF2_ITER; S.items = r.items;
+      S.key = r.key; S.salt = r.salt; S.iter = loadBlob().kdf?.iterations || PBKDF2_ITER; S.items = r.items; S.deleted = r.deleted;
       if ($('#remember').checked) await rememberKey(S.key); else await forgetKey();
       if (S.fileHandle) await syncFromFile(true);
       render();
@@ -459,7 +473,7 @@ function renderDetail() {
   $('#edit').onclick = () => nav('edit', it.id, true);
   $('#del').onclick = async () => {
     if (!confirm(`「${it.title}」を削除します。元に戻せません。よろしいですか？`)) return;
-    S.items = S.items.filter(x => x.id !== it.id); await persist(); toast('削除しました'); nav('list', null, true);
+    S.items = S.items.filter(x => x.id !== it.id); markDeleted(it.id); await persist(); toast('削除しました'); nav('list', null, true);
   };
 }
 
@@ -548,7 +562,7 @@ function renderSettings() {
         iCloud Drive に保存先を作ると、追加・変更のたびにそのファイルへ自動で書き込みます。中身は暗号化したままです。</p>
         <div class="row" style="margin-top:8px"><button class="primary" id="fsNew">保存先を作る（iCloud Drive）</button><button id="fsOpen">既にあるファイルを開く</button></div>` :
       `<p class="hint">保存先: <b>${esc(S.fileHandle.name)}</b><br>状態: ${S.fileStatus === 'ok' ? 'つながっています。変更は自動でファイルに書き込まれます' : S.fileStatus === 'prompt' ? '未接続（下の「つなぐ」を押してください）' : 'エラー: ' + esc(S.fileError)}</p>
-        <div class="row" style="margin-top:8px">${S.fileStatus === 'ok' ? `<button id="fsSave">今すぐ保存</button>` : `<button class="primary" id="fsConnect2">つなぐ</button>`}<button id="fsOpen">別のファイルを開く</button><button id="fsDetach">接続を外す</button></div>`}
+        <div class="row" style="margin-top:8px">${S.fileStatus === 'ok' ? `<button id="fsSave">今すぐ保存</button>` : `<button class="primary" id="fsConnect2">つなぐ</button>`}<button id="fsOpen">別のファイルを開く</button><button id="fsDetach">接続を外す（ファイルは残る）</button></div>`}
   </div>
   <div class="card">
     <h2>ふたりで共有する</h2>
@@ -590,11 +604,6 @@ function renderSettings() {
     <div class="err" id="perr"></div>
     <button class="block" id="chpw">変更する</button>
     <p class="hint" style="margin-top:8px">変えたら相手にも伝え、書き出したファイルを渡し直してください。</p>
-  </div>
-  <div class="card">
-    <h2>この端末から消す</h2>
-    <p class="hint">書き出したファイルがあれば、あとで「ファイルから復元する」で戻せます。</p>
-    <button class="danger block" id="wipe">この端末の金庫を全部消す</button>
   </div>
   <div class="meta">登録件数 ${S.items.length}件 ／ ${S.remembered ? 'このブラウザではパスワードなしで開きます。「ロック」を押すと次回はパスワードが要ります' : '5分さわらないと自動でロックします'}</div>`;
   wireNav();
@@ -640,15 +649,10 @@ function renderSettings() {
     let r; try { r = await decryptBlob(blob, pw); } catch (err) { return toast('パスワードが違います'); }
     if ($('#replace').checked) {
       if (!confirm(`今の ${S.items.length}件を消して、ファイルの ${r.items.length}件に置き換えます。よろしいですか？`)) return;
-      S.items = r.items;
+      S.items = r.items; S.deleted = r.deleted;
     } else {
-      let added = 0, updated = 0;
-      for (const it of r.items) {
-        const i = S.items.findIndex(x => x.id === it.id);
-        if (i < 0) { S.items.push(it); added++; }
-        else if ((it.updated || '') > (S.items[i].updated || '')) { S.items[i] = it; updated++; }
-      }
-      toast(`追加 ${added}件、更新 ${updated}件`);
+      const m = mergeItems(r.items, r.deleted);
+      toast(`追加 ${m.added}件、更新 ${m.updated}件、削除 ${m.removed}件`);
     }
     await persist(); nav('list', null, true);
   };
@@ -660,11 +664,6 @@ function renderSettings() {
     S.key = await deriveKey(a, S.salt, S.iter); await persist();
     if (S.remembered) await rememberKey(S.key);
     $('#np1').value = $('#np2').value = ''; toast('パスワードを変えました');
-  };
-  $('#wipe').onclick = () => {
-    if (!confirm('この端末の金庫を全部消します。書き出したファイルがないと戻せません。よろしいですか？')) return;
-    if (prompt('確認のため「消す」と入力してください') !== '消す') return;
-    localStorage.removeItem(STORE_KEY); Promise.all([forgetKey(), detachFile()]).then(() => { lock(); toast('消しました（iCloud のファイルは残っています）'); });
   };
 }
 
@@ -837,7 +836,7 @@ if (!window.isSecureContext || !crypto.subtle) {
     if (FS_OK) { const h = await idbGet('file'); if (h) { S.fileHandle = h; S.fileStatus = 'prompt'; await syncFromFile(false); } }
     const blob = loadBlob(), key = blob && await loadRememberedKey();
     if (key) {
-      try { const r = await decryptWithKey(blob, key); S.key = r.key; S.salt = r.salt; S.iter = blob.kdf?.iterations || PBKDF2_ITER; S.items = r.items; S.remembered = true; }
+      try { const r = await decryptWithKey(blob, key); S.key = r.key; S.salt = r.salt; S.iter = blob.kdf?.iterations || PBKDF2_ITER; S.items = r.items; S.deleted = r.deleted; S.remembered = true; }
       catch (e) { await forgetKey(); }
     }
     if (S.key && S.fileHandle && S.fileStatus === 'ok') await syncFromFile(false);   // 開けたあと、ファイル側の変更を取り込む
