@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
 <meta name="robots" content="noindex">
-<title>家の金庫</title>
+<title>Kagi</title>
 <style>
   :root{
     --bg:#f4f4f2; --card:#ffffff; --ink:#1d1d1b; --sub:#6b6b66; --line:#e2e2de;
@@ -82,7 +82,7 @@
 <script>
 'use strict';
 /* =========================================================
-   家の金庫 — 1ファイルで動く、家族2人用のパスワード・口座管理
+   Kagi — 1ファイルで動く、家族2人用のパスワード・口座管理
    ・データはこのブラウザの中（localStorage）に AES-GCM で暗号化して保存
    ・鍵はマスターパスワードから PBKDF2 で作る。平文はどこにも書かない
    ・共有は「書き出し（暗号化ファイル）→ 相手が読み込み」で行う
@@ -192,7 +192,7 @@ function render() {
 function renderSetup() {
   app.innerHTML = `
   <div class="card center">
-    <h1>家の金庫</h1>
+    <h1>Kagi</h1>
     <p class="hint">はじめに、ふたりで共有する「マスターパスワード」を決めます。<br>
     これ1つで全部の鍵が開きます。忘れると誰にも開けられないので、紙にも控えてください。</p>
     <label>マスターパスワード（12文字以上をおすすめ）</label>
@@ -202,9 +202,9 @@ function renderSetup() {
     <div class="err" id="err"></div>
     <button class="primary block" id="go">この合言葉で金庫を作る</button>
     <div class="sep"></div>
-    <p class="hint">すでに書き出したファイル（.kinko）がある人は、こちらから復元できます。</p>
+    <p class="hint">すでに書き出したファイル（.kagi）がある人は、こちらから復元できます。</p>
     <button class="block" id="restore">ファイルから復元する</button>
-    <input type="file" id="restoreFile" accept=".kinko,.json,application/json" hidden>
+    <input type="file" id="restoreFile" accept=".kagi,.json,application/json" hidden>
   </div>`;
   $('#go').onclick = async () => {
     const a = $('#pw1').value, b = $('#pw2').value;
@@ -231,7 +231,7 @@ function renderSetup() {
 function renderUnlock() {
   app.innerHTML = `
   <div class="card center">
-    <h1>家の金庫</h1>
+    <h1>Kagi</h1>
     <label>マスターパスワード</label>
     <input type="password" id="pw" autocomplete="current-password">
     <div class="err" id="err"></div>
@@ -280,7 +280,7 @@ function renderList() {
     .filter(it => !q || (it.title + ' ' + it.memo + ' ' + it.fields.filter(f => !f.secret).map(f => f.value).join(' ')).toLowerCase().includes(q))
     .sort((a, b) => a.title.localeCompare(b.title, 'ja'));
   app.innerHTML = `
-  ${topBar('家の金庫')}
+  ${topBar('Kagi')}
   <div class="row" style="margin-bottom:10px">
     <input type="search" id="q" placeholder="検索（名前・ID・メモ）" value="${esc(S.q)}">
     <button class="primary" id="add">＋ 追加</button>
@@ -414,10 +414,10 @@ function renderSettings() {
     <h2>ふたりで共有する</h2>
     <p class="hint">この金庫はこのブラウザの中にだけあります。相手にも同じ中身を渡すには、暗号化したファイルを書き出して送り、相手が読み込みます。ファイルは合言葉がないと開けないので、AirDrop や iCloud Drive で渡して大丈夫です。</p>
     <div class="row">
-      <button id="export">書き出す（.kinko）</button>
+      <button id="export">書き出す（.kagi）</button>
       <button id="import">読み込む</button>
     </div>
-    <input type="file" id="importFile" accept=".kinko,.json,application/json" hidden>
+    <input type="file" id="importFile" accept=".kagi,.json,application/json" hidden>
     <label class="chk" style="margin-top:10px"><input type="checkbox" id="replace"> 読み込むとき、今の中身を全部置き換える（ふだんはチェック不要。新しい方だけ取り込みます）</label>
   </div>
   <div class="card">
@@ -445,7 +445,7 @@ function renderSettings() {
   $('#export').onclick = async () => {
     await persist();
     const blob = new Blob([localStorage.getItem(STORE_KEY)], { type: 'application/json' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `家の金庫_${today()}.kinko`; a.click();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `Kagi_${today()}.kagi`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
     toast('書き出しました');
   };
@@ -508,14 +508,29 @@ function renderCsv() {
   <div class="card">
     <p class="hint">1行目が見出し（項目名）になっているシートを想定しています。見出しがない場合は、先にスプレッドシート側で1行目に項目名を入れてください。</p>
     <input type="file" id="csv" accept=".csv,text/csv" style="margin-top:8px">
+    <div class="sep"></div>
+    <p class="hint"><b>もっと簡単な方法：</b>スプレッドシートで、見出しの行から最後の行までをドラッグして選び <span class="kbd">⌘C</span>。下の枠に <span class="kbd">⌘V</span> で貼り付けます。シートごとに繰り返してください。</p>
+    <textarea id="paste" placeholder="ここに貼り付け（見出し行を含めて）"></textarea>
+    <label>種類（このシートの名前など）</label>
+    <input type="text" id="pasteCat" list="pasteCatList" placeholder="例：CR・銀行関係" autocomplete="off">
+    <datalist id="pasteCatList">${allCats().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
+    <button class="block" id="pasteGo">貼り付けた内容を確認する</button>
     <div id="mapArea"></div>
   </div>`;
   wireNav();
   $('#csv').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
-    let text = await f.text();
-    const rows = parseCsv(text);
-    if (rows.length < 2) return toast('データが見つかりませんでした');
+    showMapping(parseCsv(await f.text()), catFromFileName(f.name) || 'その他');
+  };
+  $('#pasteGo').onclick = () => {
+    const text = $('#paste').value;
+    if (!text.trim()) return toast('先に貼り付けてください');
+    const rows = text.replace(/^\uFEFF/, '').split(/\r?\n/).map(l => l.split('\t')).filter(r => r.some(x => x.trim() !== ''));
+    showMapping(rows, $('#pasteCat').value.trim() || 'その他');
+    $('#mapArea').scrollIntoView({ behavior: 'smooth' });
+  };
+  function showMapping(rows, defaultCat) {
+    if (rows.length < 2) return toast('データが見つかりませんでした（見出し行＋1行以上が必要です）');
     const headers = rows[0].map((h, i) => h.trim() || `列${i + 1}`);
     const body = rows.slice(1);
     let titleGuessed = false;
@@ -529,7 +544,7 @@ function renderCsv() {
     $('#mapArea').innerHTML = `
       <div class="meta">${body.length}行 見つかりました。各列をどう扱うか決めてください。</div>
       <label>取り込む先の種類（シート名がそのまま種類になります。変えても OK）</label>
-      <input type="text" id="csvCat" list="csvCatList" value="${esc(catFromFileName(f.name) || 'その他')}" autocomplete="off">
+      <input type="text" id="csvCat" list="csvCatList" value="${esc(defaultCat)}" autocomplete="off">
       <datalist id="csvCatList">${allCats().map(c => `<option value="${esc(c)}">`).join('')}</datalist>
       <table class="map" style="margin-top:10px">
         ${headers.map((h, i) => { const g = guess(h); return `<tr><td>${esc(h)}<div class="hint" style="font-size:12px">例：${esc((body[0][i] || '').slice(0, 20))}${g === 'secret' ? '' : ''}</div></td><td><select class="mapSel" data-i="${i}">${opts.map(([v, l]) => `<option value="${v}" ${v === g ? 'selected' : ''}>${l}</option>`).join('')}</select></td></tr>`; }).join('')}
@@ -559,12 +574,12 @@ function renderCsv() {
       }
       await persist(); S.view = 'list'; S.cat = cat; toast(`${n}件 取り込みました`); render();
     };
-  };
+  }
 }
 
 /* ---------- 起動 ---------- */
 if (!window.isSecureContext || !crypto.subtle) {
-  app.innerHTML = `<div class="card center"><h1>家の金庫</h1><p class="hint">このブラウザでは暗号化機能が使えません。Safari か Chrome でファイルを直接開いてください。</p></div>`;
+  app.innerHTML = `<div class="card center"><h1>Kagi</h1><p class="hint">このブラウザでは暗号化機能が使えません。Safari か Chrome でファイルを直接開いてください。</p></div>`;
 } else {
   render();
 }

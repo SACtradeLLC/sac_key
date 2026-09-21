@@ -4,7 +4,7 @@
     {
       "name": "kinko",
       "runtimeExecutable": "sh",
-      "runtimeArgs": ["-c", "cd /Users/komi/dev/family-vault && exec python3 -m http.server 8765"],
+      "runtimeArgs": ["-c", "cd /Users/komi/dev/kagi && exec python3 -m http.server 8765"],
       "port": 8765
     }
   ]

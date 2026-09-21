@@ -1,6 +1,6 @@
-# CLAUDE.md — 家の金庫（家族の金庫アプリ）
+# CLAUDE.md — Kagi（家族の金庫アプリ）
 
-この案件の目的・決めたことは vault の `10_Projects/家の金庫/README.md` が正本。作業前に読む。
+この案件の目的・決めたことは vault の `10_Projects/Kagi/README.md` が正本。作業前に読む。
 文体は vault の `90_AI/文体ナレッジ`、komi の癖は `05_Me` に従う。
 vault のフルパス: `~/Library/Mobile Documents/iCloud~md~obsidian/Documents/KomiBrain`
 
