@@ -26,3 +26,7 @@ create policy "members can update" on public.vault
   for update to authenticated
   using ((auth.jwt() ->> 'email') in (select email from public.vault_members))
   with check ((auth.jwt() ->> 'email') in (select email from public.vault_members));
+
+-- メンバー表そのものを、ログイン済みの人が読めるようにする（これが無いと上の判定が常に空になる）
+create policy "members readable" on public.vault_members
+  for select to authenticated using (true);
