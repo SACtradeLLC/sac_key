@@ -1,4 +1,4 @@
-# CLAUDE.md — Kagi（家族の金庫アプリ）
+# CLAUDE.md — sac_key（家族の金庫アプリ。フォルダ名は kagi のまま）
 
 この案件の目的・決めたことは vault の `10_Projects/Kagi/README.md` が正本。作業前に読む。
 文体は vault の `90_AI/文体ナレッジ`、komi の癖は `05_Me` に従う。

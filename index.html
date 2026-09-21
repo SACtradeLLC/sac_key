@@ -22,6 +22,8 @@
   h1{font-size:20px;margin:0}
   h2{font-size:17px;margin:0 0 12px}
   .top{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:14px}
+  .sticky{position:sticky;top:0;z-index:5;background:var(--bg);margin:0 -16px;padding:12px 16px 2px}
+  .sticky .top{margin-bottom:10px}
   .top .actions{display:flex;gap:6px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
   .center{max-width:420px;margin:12vh auto 0}
@@ -169,8 +171,26 @@ async function persist() {
 }
 function lock() {
   S.key = null; S.salt = null; S.items = []; S.view = 'list'; S.detailId = null; S.editId = null; S.shown.clear();
+  nav('list', null, true);
+}
+/* 画面遷移：#list / #detail=ID / #edit=ID / #edit=new / #settings / #csv */
+function hashFor(view, id) { return '#' + view + (id ? '=' + encodeURIComponent(id) : ''); }
+function nav(view, id, replace) {
+  const h = hashFor(view, id);
+  if (location.hash === h) { applyHash(); return; }
+  if (replace) location.replace(h); else location.hash = h;   // hashchange → applyHash → render
+}
+function applyHash() {
+  const m = /^#(list|detail|edit|settings|csv)(?:=(.*))?$/.exec(location.hash);
+  if (!m) { S.view = 'list'; }
+  else {
+    S.view = m[1]; const id = m[2] ? decodeURIComponent(m[2]) : null;
+    if (S.view === 'detail') { if (id !== S.detailId) S.shown.clear(); S.detailId = id; }
+    if (S.view === 'edit') S.editId = id === 'new' ? null : id;
+  }
   render();
 }
+window.addEventListener('hashchange', applyHash);
 let idleTimer;
 function bumpIdle() {
   clearTimeout(idleTimer);
@@ -205,7 +225,7 @@ function renderSetup() {
     <div class="err" id="err"></div>
     <button class="primary block" id="go">この合言葉で金庫を作る</button>
     <div class="sep"></div>
-    <p class="hint">すでに書き出したファイル（.sackey）がある人は、こちらから復元できます。</p>
+    <p class="hint">別のブラウザ（Safari など）で使っていた人は、そちらの sac_key の 設定 → 書き出す で .sackey ファイルを作り、ここで復元してください。</p>
     <button class="block" id="restore">ファイルから復元する</button>
     <input type="file" id="restoreFile" accept=".sackey,.kagi,.kinko,.json,application/json" hidden>
   </div>`;
@@ -246,7 +266,7 @@ function renderUnlock() {
     try {
       const r = await decryptBlob(loadBlob(), pw);
       S.key = r.key; S.salt = r.salt; S.iter = loadBlob().kdf?.iterations || PBKDF2_ITER; S.items = r.items;
-      S.view = 'list'; render();
+      render();
     } catch (e) {
       $('#err').textContent = '合言葉が違います'; $('#go').disabled = false; $('#go').textContent = '開ける'; $('#pw').select();
     }
@@ -270,7 +290,8 @@ function topBar(title, backTo) {
   </div>`;
 }
 function wireNav(root = app) {
-  $$('[data-nav]', root).forEach(b => b.onclick = () => { S.view = b.dataset.nav; render(); });
+  // 編集画面からの移動は履歴を置き換える（保存や「戻る」のあと、ブラウザの戻るで編集画面に戻らないように）
+  $$('[data-nav]', root).forEach(b => b.onclick = () => { const v = b.dataset.nav; nav(v, v === 'detail' ? S.detailId : null, S.view === 'edit'); });
   const l = $('#lockBtn', root); if (l) l.onclick = lock;
 }
 function summaryOf(it) {
@@ -285,13 +306,15 @@ function renderList() {
     .filter(it => !q || (it.title + ' ' + it.memo + ' ' + it.fields.filter(f => !f.secret).map(f => f.value).join(' ')).toLowerCase().includes(q))
     .sort((a, b) => a.title.localeCompare(b.title, 'ja'));
   app.innerHTML = `
+  <div class="sticky">
   ${topBar('sac_key')}
-  <div class="row" style="margin-bottom:10px">
+  <div class="row" style="margin-bottom:8px">
     <input type="search" id="q" placeholder="検索（名前・ID・メモ）" value="${esc(S.q)}">
     <button class="primary" id="add">＋ 追加</button>
   </div>
   <div class="tabs">${['すべて', ...(S.items.length ? [...new Set(S.items.map(i => i.category).filter(Boolean))] : CATEGORIES)].map(c => `<button class="${c === S.cat ? 'on' : ''}" data-cat="${c}">${c}</button>`).join('')}</div>
-  <div class="list">
+  </div>
+  <div class="list" style="padding-top:8px">
     ${items.length ? items.map(it => `
       <div class="item" data-id="${it.id}">
         <div style="min-width:0;flex:1"><div class="t">${esc(it.title || '（無題）')}</div><div class="s">${esc(summaryOf(it))}</div></div>
@@ -302,9 +325,9 @@ function renderList() {
   </div>`;
   wireNav();
   $('#q').oninput = e => { S.q = e.target.value; const pos = e.target.selectionStart; renderList(); const el = $('#q'); el.focus(); el.setSelectionRange(pos, pos); };
-  $('#add').onclick = () => { S.editId = null; S.view = 'edit'; render(); };
+  $('#add').onclick = () => nav('edit', 'new');
   $$('[data-cat]').forEach(b => b.onclick = () => { S.cat = b.dataset.cat; render(); });
-  $$('.item').forEach(el => el.onclick = () => { S.detailId = el.dataset.id; S.shown.clear(); S.view = 'detail'; render(); });
+  $$('.item').forEach(el => el.onclick = () => nav('detail', el.dataset.id));
   $$('[data-qc]').forEach(b => b.onclick = e => {
     e.stopPropagation();
     const it = S.items.find(x => x.id === b.dataset.id); const f = findField(it, b.dataset.qc === 'id' ? ID_RE : PW_RE);
@@ -315,9 +338,9 @@ function renderList() {
 /* 詳細 */
 function renderDetail() {
   const it = S.items.find(x => x.id === S.detailId);
-  if (!it) { S.view = 'list'; return render(); }
+  if (!it) return nav('list', null, true);
   app.innerHTML = `
-  ${topBar(it.title || '（無題）', 'list')}
+  <div class="sticky">${topBar(it.title || '（無題）', 'list')}</div>
   <div class="card">
     <div class="meta" style="margin:0 0 6px">${esc(it.category)}</div>
     ${it.fields.filter(f => f.value).map((f, i) => `
@@ -342,10 +365,10 @@ function renderDetail() {
   wireNav();
   $$('[data-show]').forEach(b => b.onclick = () => { const i = +b.dataset.show; S.shown.has(i) ? S.shown.delete(i) : S.shown.add(i); renderDetail(); });
   $$('[data-copy]').forEach(b => b.onclick = () => copyText(it.fields[+b.dataset.copy].value));
-  $('#edit').onclick = () => { S.editId = it.id; S.view = 'edit'; render(); };
+  $('#edit').onclick = () => nav('edit', it.id, true);
   $('#del').onclick = async () => {
     if (!confirm(`「${it.title}」を削除します。元に戻せません。よろしいですか？`)) return;
-    S.items = S.items.filter(x => x.id !== it.id); await persist(); S.view = 'list'; toast('削除しました'); render();
+    S.items = S.items.filter(x => x.id !== it.id); await persist(); toast('削除しました'); nav('list', null, true);
   };
 }
 
@@ -362,7 +385,7 @@ function renderEdit() {
 
   const draw = () => {
     app.innerHTML = `
-    ${topBar(orig ? '編集' : '追加', orig ? 'detail' : 'list')}
+    <div class="sticky">${topBar(orig ? '編集' : '追加', orig ? 'detail' : 'list')}</div>
     <div class="card">
       <label>種類（一覧から選ぶか、自由に入力。例：携帯契約、情報発信系）</label>
       <input type="text" id="cat" list="catList" value="${esc(draft.category)}" autocomplete="off">
@@ -416,7 +439,7 @@ function renderEdit() {
       const i = S.items.findIndex(x => x.id === draft.id);
       if (i >= 0) S.items[i] = draft; else S.items.push(draft);
       await persist();
-      S.detailId = draft.id; S.view = 'detail'; toast('保存しました'); render();
+      toast('保存しました'); nav('detail', draft.id, true);
     };
   };
   draw();
@@ -426,7 +449,7 @@ function renderEdit() {
 /* 設定 */
 function renderSettings() {
   app.innerHTML = `
-  ${topBar('設定', 'list')}
+  <div class="sticky">${topBar('設定', 'list')}</div>
   <div class="card">
     <h2>ふたりで共有する</h2>
     <p class="hint">この金庫はこのブラウザの中にだけあります。相手にも同じ中身を渡すには、暗号化したファイルを書き出して送り、相手が読み込みます。ファイルは合言葉がないと開けないので、AirDrop や iCloud Drive で渡して大丈夫です。</p>
@@ -443,10 +466,15 @@ function renderSettings() {
     <button class="block" style="margin-top:8px" data-nav="csv">CSV から取り込む</button>
   </div>
   <div class="card">
-    <h2>サイトで自動入力する（Safari のパスワードに渡す）</h2>
-    <p class="hint">ログイン画面でパスワードを自動で入れるのは、Safari や iPhone に入っている「パスワード」機能の仕事です。sac_key から、その機能が読める形（CSV）で書き出せます。ID とパスワードの両方がある項目だけが対象です。<br>
-    書き出したら Mac の「パスワード」アプリ → ファイル → パスワードを読み込む で選んでください。読み込んだら、その CSV はゴミ箱へ。</p>
-    <button class="block" style="margin-top:8px" id="exportSafari">Safari 用 CSV を書き出す</button>
+    <h2>サイトで自動入力する（ブラウザのパスワード機能に渡す）</h2>
+    <p class="hint">ログイン画面でパスワードを自動で入れるのは、Chrome や Safari に入っている「パスワード」機能の仕事です。sac_key から、その機能が読める形（CSV）で書き出せます。ID とパスワードの両方がある項目だけが対象です。<br>
+    <b>Chrome:</b> アドレス欄に <span class="kbd">chrome://password-manager/settings</span> → 「パスワードをインポート」で選ぶ。<br>
+    <b>Safari / iPhone:</b> Mac の「パスワード」アプリ → ファイル → パスワードを読み込む。<br>
+    読み込んだら、その CSV はゴミ箱へ。URL が入っていない項目は、保存はされますがサイトと自動では結びつきません。</p>
+    <div class="row" style="margin-top:8px">
+      <button id="exportChrome">Chrome 用 CSV</button>
+      <button id="exportSafari">Safari 用 CSV</button>
+    </div>
   </div>
   <div class="card">
     <h2>表示</h2>
@@ -477,22 +505,26 @@ function renderSettings() {
     toast('書き出しました');
   };
   $('#maskChk').onchange = e => { S.mask = e.target.checked; try { localStorage.setItem(MASK_KEY, S.mask ? '1' : '0'); } catch (err) {} toast(S.mask ? '隠します' : 'そのまま表示します'); };
-  $('#exportSafari').onclick = () => {
+  const exportPasswords = kind => {
     const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
-    const rows = [['Title', 'URL', 'Username', 'Password', 'Notes', 'OTPAuth']];
+    const rows = [kind === 'chrome' ? ['name', 'url', 'username', 'password', 'note'] : ['Title', 'URL', 'Username', 'Password', 'Notes', 'OTPAuth']];
+    let noUrl = 0;
     for (const it of S.items) {
       const id = findField(it, ID_RE), pw = findField(it, PW_RE);
       if (!id || !pw) continue;
       const urlF = it.fields.find(f => /^https?:\/\//i.test(f.value)) || { value: '' };
+      if (!urlF.value) noUrl++;
       const notes = [it.category, ...it.fields.filter(f => f !== id && f !== pw && f !== urlF && f.value).map(f => `${f.label}: ${f.value}`), it.memo].filter(Boolean).join(' / ');
-      rows.push([it.title, urlF.value, id.value, pw.value, notes, '']);
+      rows.push(kind === 'chrome' ? [it.title, urlF.value, id.value, pw.value, notes] : [it.title, urlF.value, id.value, pw.value, notes, '']);
     }
     if (rows.length < 2) return toast('ID とパスワードが両方ある項目がありません');
     const blob = new Blob(['\uFEFF' + rows.map(r => r.map(q).join(',')).join('\r\n')], { type: 'text/csv' });
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `sac_key_safari_${today()}.csv`; a.click();
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `sac_key_${kind}_${today()}.csv`; a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    toast(`${rows.length - 1}件を書き出しました。読み込んだら CSV は消してください`);
+    toast(`${rows.length - 1}件を書き出しました（URL なし ${noUrl}件）。読み込んだら CSV は消してください`);
   };
+  $('#exportChrome').onclick = () => exportPasswords('chrome');
+  $('#exportSafari').onclick = () => exportPasswords('safari');
   $('#import').onclick = () => $('#importFile').click();
   $('#importFile').onchange = async e => {
     const f = e.target.files[0]; if (!f) return;
@@ -512,7 +544,7 @@ function renderSettings() {
       }
       toast(`追加 ${added}件、更新 ${updated}件`);
     }
-    await persist(); S.view = 'list'; render();
+    await persist(); nav('list', null, true);
   };
   $('#chpw').onclick = async () => {
     const a = $('#np1').value, b = $('#np2').value;
@@ -591,7 +623,7 @@ function parseCsv(text) {
 }
 function renderCsv() {
   app.innerHTML = `
-  ${topBar('CSV から取り込む', 'settings')}
+  <div class="sticky">${topBar('CSV から取り込む', 'settings')}</div>
   <div class="card">
     <p class="hint">2つの形に対応しています。<b>表の形</b>（1行目が見出し）と、<b>ラベルの形</b>（「【カード名】」の下に「番号, ○○」「PW, ○○」のように項目名と値が縦に並ぶ形）。どちらかは自動で見分けます。</p>
     <input type="file" id="csv" accept=".csv,text/csv" style="margin-top:8px">
@@ -663,7 +695,7 @@ function renderCsv() {
         if (!it.title) it.title = '（無題）';
         S.items.push(it); n++;
       }
-      await persist(); S.view = 'list'; S.cat = cat; toast(`${n}件 取り込みました`); render();
+      await persist(); S.cat = cat; toast(`${n}件 取り込みました`); nav('list', null, true);
     };
   }
   function showBlocks(rows, defaultCat) {
@@ -684,7 +716,7 @@ function renderCsv() {
       const fallback = $('#blkCat').value.trim() || 'その他';
       const sel = $$('.blkSel').filter(c => c.checked).map(c => items[+c.dataset.i]);
       for (const it of sel) { if (it.category === defaultCat) it.category = fallback; S.items.push(it); }
-      await persist(); S.view = 'list'; S.cat = 'すべて'; toast(`${sel.length}件 取り込みました`); render();
+      await persist(); S.cat = 'すべて'; toast(`${sel.length}件 取り込みました`); nav('list', null, true);
     };
   }
 }
@@ -693,7 +725,8 @@ function renderCsv() {
 if (!window.isSecureContext || !crypto.subtle) {
   app.innerHTML = `<div class="card center"><h1>sac_key</h1><p class="hint">このブラウザでは暗号化機能が使えません。Safari か Chrome でファイルを直接開いてください。</p></div>`;
 } else {
-  render();
+  if (!location.hash) location.replace('#list');
+  applyHash();
 }
 </script>
 </body>
