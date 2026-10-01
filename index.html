@@ -486,7 +486,10 @@ function renderList() {
       </div>`).join('') : `<div class="empty">${S.items.length ? '見つかりません' : 'まだ何もありません。「＋ 追加」か、設定の「CSV から取り込む」から始めてください'}</div>`}
   </div>`;
   wireNav();
-  $('#q').oninput = e => { S.q = e.target.value; const pos = e.target.selectionStart; renderList(); const el = $('#q'); el.focus(); el.setSelectionRange(pos, pos); };
+  // 日本語の変換中は描き直さない（描き直すと変換が途切れてローマ字が残る）。確定したら描き直す
+  const onQ = e => { S.q = e.target.value; const pos = e.target.selectionStart; renderList(); const el = $('#q'); el.focus(); el.setSelectionRange(pos, pos); };
+  $('#q').oninput = e => { if (!e.isComposing) onQ(e); };
+  $('#q').addEventListener('compositionend', onQ);
   $('#add').onclick = () => nav('edit', 'new');
   $$('[data-cat]').forEach(b => b.onclick = () => { S.cat = b.dataset.cat; render(); });
   $$('.item').forEach(el => el.onclick = () => nav('detail', el.dataset.id));
