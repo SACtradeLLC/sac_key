@@ -786,6 +786,8 @@ function renderEdit() {
         <div class="fbox" data-i="${i}">
           <div class="fhead">
             <input type="text" class="fl" placeholder="項目名（例：ドメイン、暗証番号）" value="${esc(f.label)}" autocomplete="off">
+            <button class="small fu" ${i === 0 ? 'disabled' : ''}>上へ</button>
+            <button class="small fd" ${i === draft.fields.length - 1 ? 'disabled' : ''}>下へ</button>
             <button class="small fx">削除</button>
           </div>
           <input type="text" class="fv" placeholder="コピーして使う値だけ（例：komi-trade.com）" value="${esc(f.value)}" autocomplete="off">
@@ -827,6 +829,17 @@ function renderEdit() {
     $('#addTag').onclick = makeTag;
     $('#newTag').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) makeTag(); });
     $$('.fx').forEach(b => b.onclick = () => { sync(); draft.fields.splice(+b.closest('.fbox').dataset.i, 1); draw(); });
+    // 並び替え：1つ上・1つ下と入れ替える。動かした項目が画面の同じあたりに見えるようにする
+    const move = (b, d) => {
+      sync(); const i = +b.closest('.fbox').dataset.i, j = i + d;
+      if (j < 0 || j >= draft.fields.length) return;
+      const y = b.closest('.fbox').getBoundingClientRect().top;
+      [draft.fields[i], draft.fields[j]] = [draft.fields[j], draft.fields[i]]; draw();
+      const nb = $$('.fbox')[j]; window.scrollBy(0, nb.getBoundingClientRect().top - y);
+      $(d < 0 ? '.fu' : '.fd', nb)?.focus();
+    };
+    $$('.fu').forEach(b => b.onclick = () => move(b, -1));
+    $$('.fd').forEach(b => b.onclick = () => move(b, 1));
     $$('[data-quick]').forEach(b => b.onclick = () => addField(b.dataset.quick, false));
     $('#addField').onclick = () => addField('', true);
     $$('[data-split]').forEach(b => b.onclick = () => {
