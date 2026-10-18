@@ -194,7 +194,7 @@ function fixTitle(t) {
 }
 /* メモの1文を項目にする */
 const MEMO_FIELDS = [[/限度額|利用可能額|利用枠|上限/, '限度額'], [/締め|〆|支払日|支払い日|引き落とし|引落/, '締め日・支払日'], [/年会費/, '年会費']];
-function organizeItem(it, sheetNames = new Set()) {
+function organizeItem(it, sheetNames = new Set(), commonMemo = new Set()) {
   let changed = false, splits = 0;
   const before = JSON.stringify([it.title, it.fields, it.memo, it.tags]);
   // 1) 1行まとめを分ける（項目名が「その他の情報」などのときだけ。半分以上に項目名が付くときだけ）
@@ -203,6 +203,26 @@ function organizeItem(it, sheetNames = new Set()) {
     const parts = OTHER_LABEL.test((f.label || '').trim()) ? splitValue(f.value) : [];
     if (parts.length > 1 && parts.filter(x => x.label).length * 2 >= parts.length) { parts.forEach(x => nf.push({ label: x.label, value: x.value })); splits++; }
     else nf.push({ label: f.label || '', value: f.value || '' });
+  }
+  // 1b) 値の頭に名前が入っている形（「ドメイン komi-trade.com／komi-blog.net」）を、項目名と値に分ける。
+  //     コピー欄には、コピーして使う値だけを入れる。いくつも並んでいたら1つずつの項目にする
+  for (let i = 0; i < nf.length; i++) {
+    const f = nf[i], lb = f.label.trim();
+    const v = f.value.trim();
+    // 項目名と同じ言葉が値の頭にあれば取る（「パスワード abc」→「abc」）
+    if (lb && v.startsWith(lb) && /^[\s　:：]/.test(v.slice(lb.length))) { f.value = v.slice(lb.length).replace(/^[\s　:：]+/, ''); splits++; continue; }
+    if (!OTHER_LABEL.test(lb)) continue;
+    const m = /^([^\x00-\x7F\s　:：／]{2,15}?)[\s　]*[:：]?[\s　]+([\x21-\x7E].*)$/.exec(v) || /^([^\x00-\x7F\s　:：／]{2,15}?)[:：]\s*([\x21-\x7E].*)$/.exec(v);
+    if (!m) continue;
+    const vals = m[2].split(/[\s　]*[／、，,]\s*|[\s　]+/).map(x => x.trim()).filter(Boolean);
+    const allCode = vals.every(x => /^[\x21-\x7E]+$/.test(x));
+    const rows = allCode && vals.length > 1 ? vals.map(x => ({ label: m[1], value: x })) : [{ label: m[1], value: m[2].trim() }];
+    nf.splice(i, 1, ...rows); i += rows.length - 1; splits++;
+  }
+  // 1c) 「その他の情報」などに入った文章（英数字がない＝コピーして使う値ではない）はメモへ移す
+  for (let i = nf.length - 1; i >= 0; i--) {
+    const lb = nf[i].label.trim(), v = nf[i].value.trim();
+    if (lb && OTHER_LABEL.test(lb) && v && !/[A-Za-z0-9０-９]/.test(v)) { it.memo = [it.memo, v].filter(Boolean).join('\n'); nf.splice(i, 1); splits++; }
   }
   // 2) 「231／有効期限」のように、次の項目の名前が値の後ろにくっついている形を直す
   for (let i = 0; i < nf.length; i++) {
@@ -229,7 +249,7 @@ function organizeItem(it, sheetNames = new Set()) {
     const keep = [];
     for (const sen of line.split(/(?<=。)/)) {
       const t = sen.replace(/。$/, '').trim(); if (!t) continue;
-      if (sheetNames.has(t) || CATEGORIES.includes(t) || t in OLD_TAG) continue;
+      if (sheetNames.has(t) || commonMemo.has(t) || CATEGORIES.includes(t) || t in OLD_TAG) continue;
       const hit = MEMO_FIELDS.find(([re]) => re.test(t));
       if (hit && !nf.some(f => f.label === hit[1])) { nf.push({ label: hit[1], value: hit[1] === '限度額' ? t.replace(/^(限度額|利用可能額|利用枠)\s*[:：]?\s*/, '') : t }); splits++; }
       else keep.push(sen.trim());
@@ -254,7 +274,7 @@ function organizeItem(it, sheetNames = new Set()) {
   if (changed) it.updated = now();
   return { changed, splits };
 }
-const ORG_FLAG = 'sackey.organized.v3', ORG_BACKUP = 'sackey.backup.beforeOrganize';
+const ORG_FLAG = 'sackey.organized.v4', ORG_BACKUP = 'sackey.backup.beforeOrganize';
 async function autoOrganize(force) {
   if (!S.key) return;
   let done = false; try { done = localStorage.getItem(ORG_FLAG) === '1'; } catch (e) {}
@@ -263,7 +283,11 @@ async function autoOrganize(force) {
   let n = 0, sp = 0;
   // 取り込んだときのシート名（6つ以外のタグ名）は、メモに紛れていたら消す
   const sheetNames = new Set(S.items.flatMap(tagsOf).filter(t => !CATEGORIES.includes(t)));
-  for (const it of S.items) { const r = organizeItem(it, sheetNames); if (r.changed) n++; sp += r.splits; }
+  // 3件以上にまったく同じく入っている短いメモ行（例：サイト・ツール類ID）は、シートの見出しとみなして消す
+  const cnt = new Map();
+  for (const it of S.items) for (const l of new Set(String(it.memo || '').split(/\r?\n|(?<=。)/).map(x => x.replace(/。$/, '').trim()).filter(Boolean))) cnt.set(l, (cnt.get(l) || 0) + 1);
+  const commonMemo = new Set([...cnt].filter(([l, n]) => n >= 3 && l.length <= 25).map(([l]) => l));
+  for (const it of S.items) { const r = organizeItem(it, sheetNames, commonMemo); if (r.changed) n++; sp += r.splits; }
   try { localStorage.setItem(ORG_FLAG, '1'); } catch (e) {}
   if (n) { await persist(); toast(`自動で整理しました：${n}件を直しました（項目の分け直し ${sp}か所）。設定から元に戻せます`); }
   else if (force) toast('整理するものはありませんでした');
@@ -761,10 +785,10 @@ function renderEdit() {
         ${draft.fields.map((f, i) => `
         <div class="fbox" data-i="${i}">
           <div class="fhead">
-            <input type="text" class="fl" placeholder="項目名（例：暗証番号）" value="${esc(f.label)}" autocomplete="off">
+            <input type="text" class="fl" placeholder="項目名（例：ドメイン、暗証番号）" value="${esc(f.label)}" autocomplete="off">
             <button class="small fx">削除</button>
           </div>
-          <input type="text" class="fv" placeholder="値" value="${esc(f.value)}" autocomplete="off">
+          <input type="text" class="fv" placeholder="コピーして使う値だけ（例：komi-trade.com）" value="${esc(f.value)}" autocomplete="off">
           ${canSplit(f.value) ? `<button class="small split" data-split="${i}">この値を${canSplit(f.value)}つの項目に分ける</button>` : ''}
         </div>`).join('')}
       </div>
