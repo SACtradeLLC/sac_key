@@ -89,11 +89,9 @@
   .field{display:flex;flex-direction:column;gap:2px;padding:12px 0;border-bottom:1px solid var(--line)}
   .field:last-child{border-bottom:none}
   .field .l{font-size:12px;color:var(--sub)}
-  .field .l .sec{margin-left:6px;font-size:10px;border:1px solid var(--line);border-radius:4px;padding:0 4px}
   @media (min-width:600px){ .field{display:grid;grid-template-columns:190px 1fr;gap:12px;align-items:center} .field .l{font-size:13px} }
   .field .vrow{display:flex;align-items:center;gap:8px}
   .field .v{flex:1;font-size:17px;word-break:break-all;font-variant-numeric:tabular-nums}
-  .field .v.masked{color:var(--mask);letter-spacing:2px}
   .field .v a{color:var(--accent)}
   .memo{white-space:pre-wrap;font-size:15px}
   .toast{position:fixed;left:50%;bottom:28px;transform:translateX(-50%);background:var(--ink);color:var(--bg);padding:10px 18px;border-radius:999px;font-size:14px;opacity:0;transition:opacity .2s;pointer-events:none;z-index:9}
@@ -126,13 +124,12 @@ const STORE_KEY = 'ienokinko.vault.v1';
 const IDLE_LOCK_MS = 5 * 60 * 1000;   // 5分さわらなければ自動ロック
 const PBKDF2_ITER = 600000;
 
-const CATEGORIES = ['銀行口座', 'クレジットカード', 'ログイン', 'その他'];
-const TEMPLATES = {
-  '銀行口座': [['銀行名', false], ['支店名', false], ['口座種別', false], ['口座番号', true], ['口座名義', false], ['ネットバンキングID', false], ['ログインパスワード', true], ['暗証番号', true]],
-  'クレジットカード': [['カード会社', false], ['カード番号', true], ['名義', false], ['有効期限', true], ['セキュリティコード', true], ['暗証番号', true], ['会員サイトID', false], ['会員サイトパスワード', true]],
-  'ログイン': [['URL', false], ['ID・メール', false], ['パスワード', true]],
-  'その他': [['内容', true]],
-};
+/* タグは6つに絞る（増やしすぎると選べなくなるため。2026-10-18 komi） */
+const CATEGORIES = ['銀行・証券', 'カード・決済', 'ネットサービス', '仕事', 'くらし', 'その他'];
+const BANK_T = [['銀行名', false], ['支店名', false], ['口座種別', false], ['口座番号', true], ['口座名義', false], ['ネットバンキングID', false], ['ログインパスワード', true], ['暗証番号', true]];
+const CARD_T = [['カード会社', false], ['カード番号', true], ['名義', false], ['有効期限', true], ['セキュリティコード', true], ['暗証番号', true], ['会員サイトID', false], ['会員サイトパスワード', true]];
+const WEB_T = [['URL', false], ['ID・メール', false], ['パスワード', true]];
+const TEMPLATES = { '銀行・証券': BANK_T, 'カード・決済': CARD_T, 'ネットサービス': WEB_T, '仕事': WEB_T, 'くらし': [['ID・メール', false], ['パスワード', true]], 'その他': [['内容', true]] };
 const DEFAULT_FIELDS = [['ID', false], ['パスワード', true]];
 const fieldsFor = cat => (TEMPLATES[cat] || DEFAULT_FIELDS).map(([label, secret]) => ({ label, value: '', secret }));
 /* タグ：1件に複数。古いデータの category（1つだけ）も読めるようにする。保存時は category に先頭のタグも入れておく */
@@ -162,20 +159,20 @@ function splitValue(text) {
 /* ---------- 自動整理：中身からタグを推測して足し、「その他の情報」のような1行まとめを項目に分ける ----------
    AI は中身を見ない。komi のブラウザの中で、このルールだけで動く */
 const TAG_RULES = [
-  ['銀行口座', /銀行|信金|信用金庫|信用組合|ゆうちょ|労働金庫|ろうきん|口座番号|支店名|口座種別|ネットバンキング/i],
-  ['クレジットカード', /(?<!キャッシュ|ポイント)カード|アメックス|アメリカン|amex|visa|jcb|master|ダイナース|diners|セキュリティコード|有効期限|カード番号/i],
-  ['証券・投資', /証券|nisa|ニーサ|ideco|イデコ|投資|株取引|fx|仮想通貨|暗号資産|bitflyer|coincheck|コインチェック/i],
-  ['電子マネー・決済', /paypay|ペイペイ|楽天ペイ|メルペイ|d払い|au ?pay|suica|スイカ|pasmo|nanaco|waon|paypal|ペイパル|stripe/i],
-  ['携帯・通信', /携帯|スマホ|docomo|ドコモ|ソフトバンク|softbank|楽天モバイル|ahamo|povo|linemo|uq|ワイモバイル|y!mobile|wi-?fi|プロバイダ|光回線|nuro|ocn|eo光/i],
-  ['ネットショップ・物販', /amazon|アマゾン|楽天市場|ヤフオク|yahoo|ヤフー|メルカリ|ラクマ|ebay|イーベイ|モノタロウ|ヨドバシ|ジモティ|zozo|shopify|thebase|base\.in/i],
-  ['SNS', /instagram|インスタ|facebook|フェイスブック|twitter|ツイッター|x\.com|tiktok|ティックトック|youtube|ユーチューブ|threads|note\.com|公式line|line公式|lステップ|エルメ/i],
-  ['仕事ツール・AI', /google|gmail|グーグル|apple|icloud|microsoft|マイクロソフト|outlook|chatgpt|openai|claude|anthropic|gemini|canva|キャンバ|notion|github|vercel|supabase|zoom|slack|chatwork|dropbox|adobe|freee|マネーフォワード|弥生|wordpress|ドメイン|サーバー|xserver|エックスサーバー|お名前\.com/i],
-  ['動画・音楽', /netflix|ネットフリックス|hulu|u-?next|アマプラ|prime video|disney|ディズニー|abema|dazn|spotify|apple music|youtube premium/i],
-  ['保険', /保険|共済/i],
-  ['役所・公共', /マイナ|年金|e-?tax|イータックス|国税|税務署|ふるさと納税|住民|市役所|区役所|健康保険|ねんきん/i],
-  ['光熱費', /電気|ガス|水道|電力|東京ガス|大阪ガス/i],
-  ['会社・事業', /合同会社|株式会社|法人|sac|しろまる|くらしのマーケット|ミツモア|ジモティー|事業|請求|取引先/i],
+  ['銀行・証券', /銀行|信金|信用金庫|信用組合|ゆうちょ|労働金庫|ろうきん|口座番号|支店名|口座種別|ネットバンキング|証券|nisa|ニーサ|ideco|イデコ|投資|株取引|fx|仮想通貨|暗号資産|bitflyer|coincheck|コインチェック/i],
+  ['カード・決済', /(?<!キャッシュ|ポイント)カード|アメックス|アメリカン|amex|visa|jcb|master|ダイナース|diners|セキュリティコード|カード番号|paypay|ペイペイ|楽天ペイ|メルペイ|d払い|au ?pay|suica|スイカ|pasmo|nanaco|waon|paypal|ペイパル|stripe|決済|電子マネー/i],
+  ['仕事', /合同会社|株式会社|法人|sac|しろまる|くらしのマーケット|ミツモア|事業|請求|取引先|仕事|google|gmail|グーグル|microsoft|マイクロソフト|outlook|chatgpt|openai|claude|anthropic|gemini|canva|キャンバ|notion|github|vercel|supabase|zoom|slack|chatwork|dropbox|adobe|freee|マネーフォワード|弥生|wordpress|ドメイン|サーバー|xserver|エックスサーバー|お名前\.com/i],
+  ['くらし', /携帯|スマホ|docomo|ドコモ|ソフトバンク|softbank|楽天モバイル|ahamo|povo|linemo|uq|ワイモバイル|y!mobile|wi-?fi|プロバイダ|光回線|nuro|ocn|eo光|通信|保険|共済|マイナ|年金|e-?tax|イータックス|国税|税務署|ふるさと納税|住民|市役所|区役所|ねんきん|電気|ガス|水道|電力|公共|光熱|生活|くらし/i],
+  ['ネットサービス', /amazon|アマゾン|楽天|ヤフオク|yahoo|ヤフー|メルカリ|ラクマ|ebay|イーベイ|モノタロウ|ヨドバシ|ジモティ|zozo|shopify|thebase|base\.in|instagram|インスタ|facebook|フェイスブック|twitter|ツイッター|x\.com|tiktok|ティックトック|youtube|ユーチューブ|threads|note\.com|line|netflix|ネットフリックス|hulu|u-?next|アマプラ|prime|disney|ディズニー|abema|dazn|spotify|apple|icloud|sns|ショップ|通販|物販|動画|音楽|ネット|ログイン|サイト/i],
 ];
+/* 古いタグ名を6つのどれかに寄せる。どれにも当たらない名前はタグから外す */
+const OLD_TAG = { '銀行口座': '銀行・証券', '証券・投資': '銀行・証券', 'クレジットカード': 'カード・決済', '電子マネー・決済': 'カード・決済', 'ネットショップ・物販': 'ネットサービス', 'SNS': 'ネットサービス', '動画・音楽': 'ネットサービス', '仕事ツール・AI': '仕事', '会社・事業': '仕事', '携帯・通信': 'くらし', '保険': 'くらし', '役所・公共': 'くらし', '光熱費': 'くらし', 'その他': 'その他', 'ログイン': null };
+function normalizeTag(t) {
+  t = String(t || '').trim();
+  if (CATEGORIES.includes(t)) return t;
+  if (t in OLD_TAG) return OLD_TAG[t];
+  const hit = TAG_RULES.find(([, re]) => re.test(t)); return hit ? hit[0] : null;
+}
 const OTHER_LABEL = /^$|その他|情報|備考|詳細|メモ|補足/;
 function organizeItem(it) {
   let changed = false, splits = 0;
@@ -190,16 +187,20 @@ function organizeItem(it) {
   }
   it.fields = nf;
   // 2) タグを推測して足す（今のタグは消さない。具体的なタグが付いたら「その他」だけ外す）
-  const text = [it.title, ...it.fields.map(f => f.label), ...it.fields.filter(f => !f.secret).map(f => f.value), it.memo].join(' ');
-  const tags = [...tagsOf(it)];
-  for (const [tag, re] of TAG_RULES) if (re.test(text) && !tags.includes(tag)) tags.push(tag);
-  if ((findField(it, ID_RE) && findField(it, PW_RE)) || it.fields.some(f => /^https?:\/\//i.test(f.value))) { if (!tags.includes('ログイン')) tags.push('ログイン'); }
-  const finalTags = tags.length > 1 ? tags.filter(t => t !== 'その他') : tags;
+  // 推測に使うのは 名前・項目名・URL・メモ だけ（ID やパスワードの値に混じった英字で取り違えないように）
+  const text = [it.title, ...it.fields.map(f => f.label), ...it.fields.filter(f => /^https?:\/\//i.test(f.value)).map(f => f.value), it.memo].join(' ');
+  // 今のタグを6つのどれかに寄せ、足りなければ中身から推測。1件につき最大2つ
+  // 決まった6つ・古い14種類の名前は寄せて使う。自作の種類名（シート名など）は、中身から推測できないときだけ使う
+  const own = tagsOf(it), known = own.filter(t => CATEGORIES.includes(t) || t in OLD_TAG), custom = own.filter(t => !(CATEGORIES.includes(t) || t in OLD_TAG));
+  let tags = [...new Set(known.map(normalizeTag).filter(Boolean))].filter(t => t !== 'その他');
+  for (const [tag, re] of TAG_RULES) if (tags.length < 2 && !tags.includes(tag) && re.test(text)) tags.push(tag);
+  if (!tags.length) tags = [...new Set(custom.map(normalizeTag).filter(Boolean))].filter(t => t !== 'その他');
+  const finalTags = (tags.length ? tags : ['その他']).slice(0, 2);
   if (finalTags.join('\n') !== tagsOf(it).join('\n') || !Array.isArray(it.tags)) { setTags(it, finalTags); changed = true; }
   if (changed) it.updated = now();
   return { changed, splits };
 }
-const ORG_FLAG = 'sackey.organized.v1', ORG_BACKUP = 'sackey.backup.beforeOrganize';
+const ORG_FLAG = 'sackey.organized.v2', ORG_BACKUP = 'sackey.backup.beforeOrganize';
 async function autoOrganize(force) {
   if (!S.key) return;
   let done = false; try { done = localStorage.getItem(ORG_FLAG) === '1'; } catch (e) {}
@@ -363,7 +364,7 @@ function setTheme(t) {
   try { if (t === 'auto') localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, t); } catch (e) {}
   if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
 }
-const S = { mask: (() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch (e) { return false; } })(), key: null, salt: null, iter: PBKDF2_ITER, items: [], deleted: {}, remembered: false, cloudUser: null, cloudStatus: 'none', cloudError: '', cloudMismatch: false, view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
+const S = { mask: false, key: null, salt: null, iter: PBKDF2_ITER, items: [], deleted: {}, remembered: false, cloudUser: null, cloudStatus: 'none', cloudError: '', cloudMismatch: false, view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
 
 /* 保存は必ず1つずつ順番に（同時に走ると、古い内容でクラウドを上書きすることがあるため） */
 let busy = Promise.resolve();
@@ -575,7 +576,7 @@ function wireNav(root = app) {
   const sy = $('#syncBtn', root); if (sy) sy.onclick = async () => { await syncCloud(); render(); };
 }
 function summaryOf(it) {
-  const f = it.fields.find(x => !x.secret && x.value); return f ? f.value : '';
+  const f = findField(it, ID_RE) || it.fields.find(x => x.value && !PW_RE.test(x.label || '') && !SECRET_WORDS.test(x.label || '')); return f ? f.value : '';
 }
 const ID_RE = /^(id|ＩＤ|ユーザー|user|ログインid|メール|mail|アカウント)/i, PW_RE = /パスワード|password|^pw$|^ＰＷ$|^pass/i;
 /* ID・パスワードを探す：名前がちょうど「パスワード」「ID」の項目を優先。電話用・IC用・暗証番号などは別物として外す */
@@ -589,7 +590,7 @@ function renderList() {
   const q = S.q.trim().toLowerCase();
   const items = S.items
     .filter(it => S.cat === 'すべて' || tagsOf(it).includes(S.cat))
-    .filter(it => !q || (it.title + ' ' + it.memo + ' ' + tagsOf(it).join(' ') + ' ' + it.fields.filter(f => !f.secret).map(f => f.label + ' ' + f.value).join(' ')).toLowerCase().includes(q))
+    .filter(it => !q || (it.title + ' ' + it.memo + ' ' + tagsOf(it).join(' ') + ' ' + it.fields.map(f => f.label + ' ' + f.value).join(' ')).toLowerCase().includes(q))
     .sort((a, b) => a.title.localeCompare(b.title, 'ja'));
   app.innerHTML = `
   <div class="sticky">
@@ -640,13 +641,9 @@ function renderDetail() {
     <div class="tags" style="margin:0 0 4px">${tagsOf(it).map(t => `<span class="tag" style="font-size:12px;padding:2px 8px">${esc(t)}</span>`).join('')}</div>
     ${it.fields.map((f, i) => f.value ? `
       <div class="field">
-        <div class="l">${esc(f.label || '（項目名なし）')}${f.secret ? '<span class="sec">秘密</span>' : ''}</div>
+        <div class="l">${esc(f.label || '（項目名なし）')}</div>
         <div class="vrow">
-          <div class="v ${f.secret && S.mask && !S.shown.has(i) ? 'masked' : ''}" data-i="${i}">${
-            f.secret && S.mask && !S.shown.has(i) ? '••••••••' :
-            (/^https?:\/\//i.test(f.value) ? `<a href="${esc(f.value)}" target="_blank" rel="noopener">${esc(f.value)}</a>` : esc(f.value))
-          }</div>
-          ${f.secret && S.mask ? `<button class="small" data-show="${i}">${S.shown.has(i) ? '隠す' : '表示'}</button>` : ''}
+          <div class="v">${/^https?:\/\//i.test(f.value) ? `<a href="${esc(f.value)}" target="_blank" rel="noopener">${esc(f.value)}</a>` : esc(f.value)}</div>
           <button class="small" data-copy="${i}">コピー</button>
         </div>
       </div>` : '').join('')}
@@ -658,7 +655,6 @@ function renderDetail() {
     <button class="danger" id="del">削除</button>
   </div>`;
   wireNav();
-  $$('[data-show]').forEach(b => b.onclick = () => { const i = +b.dataset.show; S.shown.has(i) ? S.shown.delete(i) : S.shown.add(i); renderDetail(); });
   $$('[data-copy]').forEach(b => b.onclick = () => copyText(it.fields[+b.dataset.copy].value));
   $('#edit').onclick = () => nav('edit', it.id, true);
   $('#del').onclick = async () => {
@@ -675,13 +671,13 @@ function genPassword(len = 16) {
 }
 function renderEdit() {
   const orig = S.items.find(x => x.id === S.editId);
-  const startCat = S.cat !== 'すべて' ? S.cat : 'ログイン';
+  const startCat = S.cat !== 'すべて' ? S.cat : 'ネットサービス';
   const draft = orig ? JSON.parse(JSON.stringify(orig)) : { id: uid(), title: '', fields: fieldsFor(startCat), memo: '' };
   draft.tags = orig ? [...tagsOf(orig)] : [startCat];
   const extraTags = [];   // この画面で新しく作ったタグ（保存前でも選べるように）
 
   const draw = () => {
-    const tagChoices = [...new Set([...allCats(), ...extraTags, ...draft.tags])];
+    const tagChoices = [...new Set([...CATEGORIES, ...usedTags(), ...extraTags, ...draft.tags])];
     const have = new Set(draft.fields.map(f => f.label.trim()));
     app.innerHTML = `
     <div class="sticky">${topBar(orig ? '編集' : '追加', orig ? 'detail' : 'list')}</div>
@@ -689,12 +685,14 @@ function renderEdit() {
       <div class="sect">名前</div>
       <input type="text" id="title" value="${esc(draft.title)}" placeholder="例：アメリカン・エキスプレス、三井住友銀行、Amazon" autocomplete="off">
 
-      <div class="sect">タグ（いくつでも選べます）</div>
+      <div class="sect">タグ（2つまでがおすすめ）</div>
       <div class="chips">${tagChoices.map(t => `<button class="${draft.tags.includes(t) ? 'on' : ''}" data-tag="${esc(t)}">${esc(t)}</button>`).join('')}</div>
-      <div class="row" style="margin-top:8px">
-        <input type="text" id="newTag" placeholder="新しいタグ（例：携帯契約、仕事用）" autocomplete="off">
-        <button class="small" id="addTag">タグを作る</button>
-      </div>
+      <details style="margin-top:8px"><summary class="hint" style="cursor:pointer">新しいタグを作る（6つで足りないときだけ）</summary>
+        <div class="row" style="margin-top:8px">
+          <input type="text" id="newTag" placeholder="新しいタグの名前" autocomplete="off">
+          <button class="small" id="addTag">作る</button>
+        </div>
+      </details>
 
       <div class="sect">項目</div>
       <div id="fields">
@@ -702,17 +700,15 @@ function renderEdit() {
         <div class="fbox" data-i="${i}">
           <div class="fhead">
             <input type="text" class="fl" placeholder="項目名（例：暗証番号）" value="${esc(f.label)}" autocomplete="off">
-            <label class="chk"><input type="checkbox" class="fs" ${f.secret ? 'checked' : ''}>秘密</label>
             <button class="small fx">削除</button>
           </div>
-          <input type="text" class="fv" placeholder="値" value="${esc(f.value)}" autocomplete="off" ${f.secret && S.mask ? 'style="-webkit-text-security:disc"' : ''}>
+          <input type="text" class="fv" placeholder="値" value="${esc(f.value)}" autocomplete="off">
           ${canSplit(f.value) ? `<button class="small split" data-split="${i}">この値を${canSplit(f.value)}つの項目に分ける</button>` : ''}
         </div>`).join('')}
       </div>
       <div class="hint" style="margin:10px 0 6px">押すと項目が足されます</div>
       <div class="chips add">${QUICK_FIELDS.filter(l => !have.has(l)).map(l => `<button data-quick="${esc(l)}">${esc(l)}</button>`).join('')}<button id="addField">名前を自分で入れる</button></div>
       <button class="small" id="genPw" style="margin-top:10px">パスワードを自動で作って入れる</button>
-      <p class="hint" style="margin:8px 0 0">「秘密」は、設定で「隠す」をオンにしたときだけ ●●● になります。</p>
 
       <div class="sect">メモ</div>
       <textarea id="memo">${esc(draft.memo)}</textarea>
@@ -722,10 +718,10 @@ function renderEdit() {
     wireNav();
     const sync = () => {
       draft.title = $('#title').value; draft.memo = $('#memo').value;
-      draft.fields = $$('.fbox').map(r => ({ label: $('.fl', r).value, value: $('.fv', r).value, secret: $('.fs', r).checked }));
+      draft.fields = $$('.fbox').map(r => ({ label: $('.fl', r).value, value: $('.fv', r).value }));
     };
     const addField = (label, focusLabel) => {
-      sync(); draft.fields.push({ label, value: '', secret: !!label && SECRET_WORDS.test(label) }); draw();
+      sync(); draft.fields.push({ label, value: '' }); draw();
       const r = $$('.fbox').pop(); (focusLabel ? $('.fl', r) : $('.fv', r)).focus();
     };
     $$('[data-tag]').forEach(b => b.onclick = () => {
@@ -744,7 +740,6 @@ function renderEdit() {
     };
     $('#addTag').onclick = makeTag;
     $('#newTag').addEventListener('keydown', e => { if (e.key === 'Enter' && !e.isComposing) makeTag(); });
-    $$('.fs').forEach(c => c.onchange = () => { sync(); draw(); });
     $$('.fx').forEach(b => b.onclick = () => { sync(); draft.fields.splice(+b.closest('.fbox').dataset.i, 1); draw(); });
     $$('[data-quick]').forEach(b => b.onclick = () => addField(b.dataset.quick, false));
     $('#addField').onclick = () => addField('', true);
@@ -783,15 +778,10 @@ function renderSettings() {
   <div class="sticky">${topBar('設定', 'list')}</div>
   ${cloudCard(false)}
   <div class="card">
-    <h2>ふたりで共有する</h2>
-    <p class="hint">クラウドにログインしていれば、相手の端末でも同じメールでログインし、同じ sac_key のパスワードで開くだけです。<br>
-    控えを手元に置きたいときは「書き出す」。別の端末に手で渡すときは、相手が「読み込む」で取り込みます。</p>
-    <div class="row">
-      <button id="export">書き出す（.sackey）</button>
-      <button id="import">読み込む</button>
-    </div>
-    <input type="file" id="importFile" accept=".sackey,.kagi,.kinko,.json,application/json" hidden>
-    <label class="chk" style="margin-top:10px"><input type="checkbox" id="replace"> 読み込むとき、今の中身を全部置き換える（ふだんはチェック不要。新しい方だけ取り込みます）</label>
+    <h2>表示</h2>
+    <div class="sect">画面の色</div>
+    <div class="chips">${[['auto', '端末に合わせる'], ['light', '通常（明るい）'], ['dark', 'ダーク（暗い）']].map(([v, l]) => `<button class="${getTheme() === v ? 'on' : ''}" data-theme-set="${v}">${l}</button>`).join('')}</div>
+    <p class="hint" style="margin:6px 0 0">「端末に合わせる」は、Mac や iPhone の外観の設定（ライト／ダーク）に自動で合わせます。この端末だけの設定です。</p>
   </div>
   <div class="card">
     <h2>ほかのアプリへ移す（全部を CSV で書き出す）</h2>
@@ -805,6 +795,23 @@ function renderSettings() {
     <button class="block" style="margin-top:8px" data-nav="csv">CSV から取り込む</button>
   </div>
   <div class="card">
+    <h2>ふたりで共有する</h2>
+    <p class="hint">クラウドにログインしていれば、相手の端末でも同じメールでログインし、同じ sac_key のパスワードで開くだけです。<br>
+    控えを手元に置きたいときは「書き出す」。別の端末に手で渡すときは、相手が「読み込む」で取り込みます。</p>
+    <div class="row">
+      <button id="export">書き出す（.sackey）</button>
+      <button id="import">読み込む</button>
+    </div>
+    <input type="file" id="importFile" accept=".sackey,.kagi,.kinko,.json,application/json" hidden>
+    <label class="chk" style="margin-top:10px"><input type="checkbox" id="replace"> 読み込むとき、今の中身を全部置き換える（ふだんはチェック不要。新しい方だけ取り込みます）</label>
+  </div>
+  <details class="card"><summary style="cursor:pointer;font-weight:600">そのほかの設定</summary>
+  <div style="margin-top:14px">
+    <h2>自動で整理する</h2>
+    <p class="hint">タグを6つ（銀行・証券／カード・決済／ネットサービス／仕事／くらし／その他）にまとめ、名前や項目から1件につき2つまで付けます。「その他の情報」に1行でまとまった中身は、項目ごとに分けます。整理する前の状態は控えとして残ります。</p>
+    <div class="row" style="margin-top:8px"><button id="orgRun">もう一度整理する</button><button id="orgUndo">整理する前に戻す</button></div>
+  </div>
+  <div class="sep"></div><div>
     <h2>サイトで自動入力する（ブラウザのパスワード機能に渡す）</h2>
     <p class="hint">ログイン画面でパスワードを自動で入れるのは、Chrome や Safari に入っている「パスワード」機能の仕事です。sac_key から、その機能が読める形（CSV）で書き出せます。ID とパスワードの両方がある項目だけが対象です。<br>
     <b>Chrome:</b> アドレス欄に <span class="kbd">chrome://password-manager/settings</span> → 「パスワードをインポート」で選ぶ。<br>
@@ -815,19 +822,7 @@ function renderSettings() {
       <button id="exportSafari">Safari 用 CSV</button>
     </div>
   </div>
-  <div class="card">
-    <h2>自動で整理する</h2>
-    <p class="hint">名前や項目から、タグ（銀行口座・クレジットカード・証券・携帯・ネットショップなど）を推測して足します。「その他の情報」に1行でまとまった中身は、項目ごとに分けます。今のタグは消しません。整理する前の状態は控えとして残ります。</p>
-    <div class="row" style="margin-top:8px"><button id="orgRun">もう一度整理する</button><button id="orgUndo">整理する前に戻す</button></div>
-  </div>
-  <div class="card">
-    <h2>表示</h2>
-    <div class="sect">画面の色</div>
-    <div class="chips">${[['auto', '端末に合わせる'], ['light', '通常（明るい）'], ['dark', 'ダーク（暗い）']].map(([v, l]) => `<button class="${getTheme() === v ? 'on' : ''}" data-theme-set="${v}">${l}</button>`).join('')}</div>
-    <p class="hint" style="margin:6px 0 14px">「端末に合わせる」は、Mac や iPhone の外観の設定（ライト／ダーク）に自動で合わせます。この端末だけの設定です。</p>
-    <label class="chk"><input type="checkbox" id="maskChk" ${S.mask ? 'checked' : ''}> 秘密の項目を ●●● で隠す（「表示」ボタンで見る）</label>
-  </div>
-  <div class="card">
+  <div class="sep"></div><div>
     <h2>パスワードを変える</h2>
     <label>新しいパスワード</label>
     <input type="password" id="np1" autocomplete="new-password">
@@ -837,6 +832,7 @@ function renderSettings() {
     <button class="block" id="chpw">変更する</button>
     <p class="hint" style="margin-top:8px">変えたら相手にも伝え、書き出したファイルを渡し直してください。</p>
   </div>
+  </details>
   <div class="meta">登録件数 ${S.items.length}件 ／ ${S.remembered ? 'このブラウザではパスワードなしで開きます。「ロック」を押すと次回はパスワードが要ります' : '5分さわらないと自動でロックします'}</div>`;
   wireNav();
   $('#export').onclick = async () => {
@@ -848,7 +844,6 @@ function renderSettings() {
   };
   wireCloud(async () => { await syncCloud(); });
   $$('[data-theme-set]').forEach(b => b.onclick = () => { setTheme(b.dataset.themeSet); renderSettings(); });
-  $('#maskChk').onchange = e => { S.mask = e.target.checked; try { localStorage.setItem(MASK_KEY, S.mask ? '1' : '0'); } catch (err) {} toast(S.mask ? '隠します' : 'そのまま表示します'); };
   const exportPasswords = kind => {
     const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
     const rows = [kind === 'chrome' ? ['name', 'url', 'username', 'password', 'note'] : ['Title', 'URL', 'Username', 'Password', 'Notes', 'OTPAuth']];
@@ -1019,10 +1014,9 @@ function renderCsv() {
       if (CAT_WORDS.test(h)) return 'cat';
       if (!titleGuessed && TITLE_WORDS.test(h)) { titleGuessed = true; return 'title'; }
       if (MEMO_WORDS.test(h)) return 'memo';
-      if (SECRET_WORDS.test(h) || /その他の情報|その他情報/.test(h)) return 'secret';
       return 'plain';
     };
-    const opts = [['title', '名前にする'], ['cat', '種類にする（行ごとに分ける）'], ['plain', '項目（そのまま表示）'], ['secret', '項目（秘密・隠す）'], ['memo', 'メモに入れる'], ['skip', '取り込まない']];
+    const opts = [['title', '名前にする'], ['cat', 'タグにする'], ['plain', '項目にする'], ['memo', 'メモに入れる'], ['skip', '取り込まない']];
     $('#mapArea').innerHTML = `
       <div class="meta">${body.length}行 見つかりました。各列をどう扱うか決めてください。</div>
       <label>取り込む先の種類（「種類にする」列がある行はそちらを優先。ない行に付ける種類）</label>
@@ -1048,12 +1042,11 @@ function renderCsv() {
           else if (m === 'cat') { it._tags = v.split(/\s*\/\s*/); it.category = it._tags[0]; }
           else if (m === 'memo') memos.push(v);
           else if (m === 'plain') it.fields.push({ label: headers[i], value: v, secret: false });
-          else if (m === 'secret') it.fields.push({ label: headers[i], value: v, secret: true });
         });
         it.memo = memos.join('\n');
         if (!it.title && !it.fields.length) continue;
         if (!it.title) it.title = '（無題）';
-        setTags(it, it._tags || [it.category]); delete it._tags; S.items.push(it); n++;
+        setTags(it, it._tags || [it.category]); delete it._tags; organizeItem(it); S.items.push(it); n++;
       }
       await persist(); S.cat = cat; toast(`${n}件 取り込みました`); nav('list', null, true);
     };
@@ -1075,7 +1068,7 @@ function renderCsv() {
     $('#doBlk').onclick = async () => {
       const fallback = $('#blkCat').value.trim() || 'その他';
       const sel = $$('.blkSel').filter(c => c.checked).map(c => items[+c.dataset.i]);
-      for (const it of sel) { if (it.category === defaultCat) it.category = fallback; setTags(it, [it.category]); S.items.push(it); }
+      for (const it of sel) { if (it.category === defaultCat) it.category = fallback; setTags(it, [it.category]); organizeItem(it); S.items.push(it); }
       await persist(); S.cat = 'すべて'; toast(`${sel.length}件 取り込みました`); nav('list', null, true);
     };
   }
