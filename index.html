@@ -11,6 +11,7 @@
 <meta name="apple-mobile-web-app-title" content="sac_key">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="theme-color" content="#1f6f5f">
+<script>try { const t = localStorage.getItem('sackey.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <script src="config.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js"></script>
 <style>
@@ -18,11 +19,16 @@
     --bg:#f4f4f2; --card:#ffffff; --ink:#1d1d1b; --sub:#6b6b66; --line:#e2e2de;
     --accent:#1f6f5f; --accent-ink:#ffffff; --danger:#b3261e; --chip:#ecece8; --mask:#a7a7a2;
   }
+  :root{color-scheme:light}
   @media (prefers-color-scheme: dark){
     :root:not([data-theme="light"]){
       --bg:#161616; --card:#222222; --ink:#f0f0ec; --sub:#a4a49e; --line:#3a3a36;
-      --accent:#5fbfa8; --accent-ink:#0f1f1b; --danger:#ff8a80; --chip:#2e2e2b; --mask:#6a6a66;
+      --accent:#5fbfa8; --accent-ink:#0f1f1b; --danger:#ff8a80; --chip:#2e2e2b; --mask:#6a6a66; color-scheme:dark;
     }
+  }
+  :root[data-theme="dark"]{
+    --bg:#161616; --card:#222222; --ink:#f0f0ec; --sub:#a4a49e; --line:#3a3a36;
+    --accent:#5fbfa8; --accent-ink:#0f1f1b; --danger:#ff8a80; --chip:#2e2e2b; --mask:#6a6a66; color-scheme:dark;
   }
   *{box-sizing:border-box}
   html,body{margin:0;overflow-x:clip;background:var(--bg);color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Hiragino Sans","Hiragino Kaku Gothic ProN","Noto Sans JP",sans-serif;font-size:16px;line-height:1.55;-webkit-text-size-adjust:100%}
@@ -34,6 +40,7 @@
   .sticky .top{margin-bottom:10px}
   .banner{display:flex;align-items:center;justify-content:space-between;gap:8px;background:#fff3cd;color:#5c4400;border:1px solid #f0d27a;border-radius:10px;padding:8px 12px;font-size:13px;margin-bottom:8px}
   @media (prefers-color-scheme: dark){ :root:not([data-theme="light"]) .banner{background:#3a3010;color:#ffe08a;border-color:#6b5a1e} }
+  :root[data-theme="dark"] .banner{background:#3a3010;color:#ffe08a;border-color:#6b5a1e}
   .top .actions{display:flex;gap:6px}
   .card{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px;margin-bottom:12px}
   .center{max-width:420px;margin:12vh auto 0}
@@ -214,9 +221,9 @@ async function undoOrganize() {
 /* 「分ける」ボタンを出すか：2つ以上に分かれ、少なくとも1つに項目名が付くときだけ（ただのパスワードには出さない） */
 const canSplit = v => { const r = splitValue(v); return r.length > 1 && r.some(x => x.label) ? r.length : 0; };
 const catFromFileName = name => { const m = String(name || '').replace(/\.[^.]+$/, '').split(/\s+-\s+/); return m.length > 1 ? m[m.length - 1].trim() : ''; };
-const SECRET_WORDS = /パスワード|password|pass|pw|ＰＷ|暗証|pin|番号|number|no\.|コード|code|セキュリティ|cvv|cvc|秘密|鍵|key|token|トークン|期限|認証/i;
+const SECRET_WORDS = /パスワード|password|pass|pw|ＰＷ|暗証|pin|番号|number|no\.|コード|code|セキュリティ|cvv|cvc|秘密|鍵|key|token|トークン|期限|認証|ic用|ｉｃ用/i;
 const TITLE_WORDS = /名前|名称|サービス|口座名|サイト|銀行名|カード会社|項目名|タイトル|title|name|site/i;
-const CAT_WORDS = /^(分類|種類|カテゴリ|カテゴリー|category|type)$/i;
+const CAT_WORDS = /^(分類|種類|タグ|カテゴリ|カテゴリー|category|tags?|type)$/i;
 const MEMO_WORDS = /メモ|備考|note|memo|元シート|出典|source/i;
 
 /* ---------- 小道具 ---------- */
@@ -295,7 +302,7 @@ async function cloudInit() {
 async function cloudLogin(email, password) {
   const { error } = await sb.auth.signInWithPassword({ email, password });
   if (error) throw error;
-  S.cloudUser = email; S.cloudStatus = 'ok'; S.cloudError = '';
+  S.cloudUser = email; S.cloudStatus = 'ok'; S.cloudError = ''; S.cloudMismatch = false;
 }
 async function cloudLogout() { try { await sb.auth.signOut(); } catch (e) {} S.cloudUser = null; S.cloudStatus = 'none'; }
 async function cloudPull() {
@@ -314,27 +321,12 @@ function cloudErrText(e) {
   if (/Failed to fetch|NetworkError|Load failed/i.test(m)) return 'ネットにつながっていません';
   return m;
 }
-/* クラウドと合わせる：読む → マージ → 書く */
-async function syncCloud() {
-  if (!sb || !S.cloudUser || !S.key) return;
-  S.cloudStatus = 'syncing';
-  try {
-    const blob = await cloudPull();
-    if (blob) {
-      if (blob.app !== 'ienokinko') throw new Error('sac_key のデータではありません');
-      let r; try { r = await decryptWithKey(blob, S.key); }
-      catch (e) { S.cloudStatus = 'error'; S.cloudError = 'クラウドのデータは別のパスワードで作られています。設定の「クラウドのデータに合わせる」を押してください'; return; }
-      const m = mergeItems(r.items, r.deleted);
-      if (m.added || m.updated || m.removed) toast(`クラウドと合わせました：追加 ${m.added}・更新 ${m.updated}・削除 ${m.removed}`);
-    }
-    S.cloudStatus = 'ok'; S.cloudError = '';
-    await persist();
-  } catch (e) { S.cloudStatus = 'error'; S.cloudError = cloudErrText(e); }
-}
+/* クラウドと合わせる：読む → マージ → 書く。persist() と同じ処理（下の saveAndSync） */
+const syncCloud = () => persist();
 /* このブラウザのデータを捨てて、クラウドのデータを採用する（パスワードが違うとき用） */
 async function adoptCloud() {
   const blob = await cloudPull(); if (!blob) return toast('クラウドにデータがありません');
-  saveBlobRaw(blob); await forgetKey(); S.cloudStatus = 'none';
+  saveBlobRaw(blob); await forgetKey(); S.cloudStatus = 'none'; S.cloudMismatch = false;
   S.key = null; S.items = []; S.deleted = {}; toast('クラウドのデータに合わせました。そのパスワードで開いてください'); nav('list', null, true);
 }
 
@@ -365,15 +357,45 @@ function loadBlob() { try { const s = localStorage.getItem(STORE_KEY); return s 
 function saveBlobRaw(blob) { localStorage.setItem(STORE_KEY, JSON.stringify(blob)); }
 
 /* ---------- 状態 ---------- */
-const MASK_KEY = 'sackey.mask';
-const S = { mask: (() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch (e) { return false; } })(), key: null, salt: null, iter: PBKDF2_ITER, items: [], deleted: {}, remembered: false, cloudUser: null, cloudStatus: 'none', cloudError: '', view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
+const MASK_KEY = 'sackey.mask', THEME_KEY = 'sackey.theme';
+const getTheme = () => { try { const t = localStorage.getItem(THEME_KEY); return t === 'light' || t === 'dark' ? t : 'auto'; } catch (e) { return 'auto'; } };
+function setTheme(t) {
+  try { if (t === 'auto') localStorage.removeItem(THEME_KEY); else localStorage.setItem(THEME_KEY, t); } catch (e) {}
+  if (t === 'auto') delete document.documentElement.dataset.theme; else document.documentElement.dataset.theme = t;
+}
+const S = { mask: (() => { try { return localStorage.getItem(MASK_KEY) === '1'; } catch (e) { return false; } })(), key: null, salt: null, iter: PBKDF2_ITER, items: [], deleted: {}, remembered: false, cloudUser: null, cloudStatus: 'none', cloudError: '', cloudMismatch: false, view: 'list', cat: 'すべて', q: '', editId: null, detailId: null, shown: new Set() };
 
-async function persist() {
+/* 保存は必ず1つずつ順番に（同時に走ると、古い内容でクラウドを上書きすることがあるため） */
+let busy = Promise.resolve();
+function serial(fn) { const p = busy.then(fn); busy = p.catch(() => {}); return p; }
+function persist(opts = {}) { return serial(() => saveAndSync(opts)); }
+/* 1回の保存：クラウドの最新を読んで合わせる → この端末に保存 → クラウドに書く。
+   相手の端末の変更を、こちらの古い内容で消さないために、書く前に必ず読む */
+async function saveAndSync({ noPull } = {}) {
+  if (!S.key) return;
+  const cloud = sb && S.cloudUser && !S.cloudMismatch;
+  if (cloud && !noPull) {
+    S.cloudStatus = 'syncing';
+    try {
+      const remote = await cloudPull();
+      if (remote) {
+        if (remote.app !== 'ienokinko') throw new Error('sac_key のデータではありません');
+        let r = null;
+        try { r = await decryptWithKey(remote, S.key); }
+        catch (e) { S.cloudMismatch = true; S.cloudStatus = 'error'; S.cloudError = 'クラウドのデータは別のパスワードで作られています。設定の「クラウドのデータに合わせる」を押してください'; }
+        if (r) {
+          const m = mergeItems(r.items, r.deleted);
+          if (m.added || m.updated || m.removed) toast(`クラウドと合わせました：追加 ${m.added}・更新 ${m.updated}・削除 ${m.removed}`);
+        }
+      }
+      if (!S.cloudMismatch) S.cloudStatus = 'ok';
+    } catch (e) { S.cloudStatus = 'error'; S.cloudError = cloudErrText(e); }
+  }
   pruneDeleted();
   const blob = await encryptItems(S.key, S.salt, S.iter, S.items, S.deleted);
-  saveBlobRaw(blob);
-  if (sb && S.cloudUser && S.cloudStatus !== 'error') {
-    try { await cloudPush(blob); S.cloudStatus = 'ok'; }
+  try { saveBlobRaw(blob); } catch (e) { toast('この端末に保存できませんでした（空き容量を確認してください）'); }
+  if (cloud && !S.cloudMismatch && (noPull || S.cloudStatus === 'ok')) {
+    try { await cloudPush(blob); S.cloudStatus = 'ok'; S.cloudError = ''; }
     catch (e) { S.cloudStatus = 'error'; S.cloudError = cloudErrText(e); toast('クラウドに保存できませんでした：' + S.cloudError); }
   }
 }
@@ -488,7 +510,7 @@ function renderUnlock() {
         if (!cb) throw e1;
         r = await decryptBlob(cb, pw); src = cb; saveBlobRaw(cb);
       }
-      S.key = r.key; S.salt = r.salt; S.iter = src.kdf?.iterations || PBKDF2_ITER; S.items = r.items; S.deleted = r.deleted;
+      S.key = r.key; S.salt = r.salt; S.iter = src.kdf?.iterations || PBKDF2_ITER; S.items = r.items; S.deleted = r.deleted; S.cloudMismatch = false;
       if ($('#remember').checked) await rememberKey(S.key); else await forgetKey();
       await syncCloud(); await autoOrganize();
       render();
@@ -556,7 +578,13 @@ function summaryOf(it) {
   const f = it.fields.find(x => !x.secret && x.value); return f ? f.value : '';
 }
 const ID_RE = /^(id|ＩＤ|ユーザー|user|ログインid|メール|mail|アカウント)/i, PW_RE = /パスワード|password|^pw$|^ＰＷ$|^pass/i;
-const findField = (it, re) => it.fields.find(f => re.test((f.label || '').trim()) && f.value);
+/* ID・パスワードを探す：名前がちょうど「パスワード」「ID」の項目を優先。電話用・IC用・暗証番号などは別物として外す */
+const ID_STRICT = /^(id|ＩＤ|ユーザーid|ユーザー名|ログインid|id・メール|メール|メールアドレス|mail|e-?mail|アカウント)$/i, PW_STRICT = /^(パスワード|password|pw|ＰＷ|pass|ログインパスワード)$/i;
+const NOT_MAIN = /電話|ic用|ｉｃ|暗証|ネットワーク|カード|口座|セキュリティ/i;
+const findField = (it, re) => {
+  const strict = re === ID_RE ? ID_STRICT : re === PW_RE ? PW_STRICT : null, lb = f => (f.label || '').trim();
+  return (strict && it.fields.find(f => strict.test(lb(f)) && f.value)) || it.fields.find(f => re.test(lb(f)) && !NOT_MAIN.test(lb(f)) && f.value);
+};
 function renderList() {
   const q = S.q.trim().toLowerCase();
   const items = S.items
@@ -735,6 +763,7 @@ function renderEdit() {
     $('#save').onclick = async () => {
       sync();
       if (!draft.title.trim()) return $('#err').textContent = '名前を入れてください';
+      $('#save').disabled = true; $('#save').textContent = '保存しています…';
       setTags(draft, draft.tags);
       draft.fields = draft.fields.filter(f => f.label.trim() || f.value.trim());
       draft.updated = now();
@@ -765,6 +794,12 @@ function renderSettings() {
     <label class="chk" style="margin-top:10px"><input type="checkbox" id="replace"> 読み込むとき、今の中身を全部置き換える（ふだんはチェック不要。新しい方だけ取り込みます）</label>
   </div>
   <div class="card">
+    <h2>ほかのアプリへ移す（全部を CSV で書き出す）</h2>
+    <p class="hint">登録している全件を、ID・パスワードも含めて1つの CSV に書き出します。1行が1件で、列は 名前・タグ・URL・ID・パスワード・そのほかの項目・メモ の順です。Excel や Google スプレッドシートで開けて、sac_key の「CSV から取り込む」にもそのまま戻せます。<br>
+    <b>ファイルの中身は暗号化されていません。</b>移し終わったら、ゴミ箱に入れて、ゴミ箱も空にしてください。</p>
+    <button class="block" id="exportAll" style="margin-top:8px">全部を CSV で書き出す</button>
+  </div>
+  <div class="card">
     <h2>スプレッドシートから取り込む</h2>
     <p class="hint">Google スプレッドシートで <span class="kbd">ファイル → ダウンロード → カンマ区切り形式（.csv）</span> と進み、そのファイルを選びます。シートが複数ある場合は、シートごとに1回ずつ。</p>
     <button class="block" style="margin-top:8px" data-nav="csv">CSV から取り込む</button>
@@ -787,6 +822,9 @@ function renderSettings() {
   </div>
   <div class="card">
     <h2>表示</h2>
+    <div class="sect">画面の色</div>
+    <div class="chips">${[['auto', '端末に合わせる'], ['light', '通常（明るい）'], ['dark', 'ダーク（暗い）']].map(([v, l]) => `<button class="${getTheme() === v ? 'on' : ''}" data-theme-set="${v}">${l}</button>`).join('')}</div>
+    <p class="hint" style="margin:6px 0 14px">「端末に合わせる」は、Mac や iPhone の外観の設定（ライト／ダーク）に自動で合わせます。この端末だけの設定です。</p>
     <label class="chk"><input type="checkbox" id="maskChk" ${S.mask ? 'checked' : ''}> 秘密の項目を ●●● で隠す（「表示」ボタンで見る）</label>
   </div>
   <div class="card">
@@ -809,6 +847,7 @@ function renderSettings() {
     toast('書き出しました');
   };
   wireCloud(async () => { await syncCloud(); });
+  $$('[data-theme-set]').forEach(b => b.onclick = () => { setTheme(b.dataset.themeSet); renderSettings(); });
   $('#maskChk').onchange = e => { S.mask = e.target.checked; try { localStorage.setItem(MASK_KEY, S.mask ? '1' : '0'); } catch (err) {} toast(S.mask ? '隠します' : 'そのまま表示します'); };
   const exportPasswords = kind => {
     const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
@@ -830,6 +869,27 @@ function renderSettings() {
   };
   $('#orgRun').onclick = async () => { await autoOrganize(true); };
   $('#orgUndo').onclick = async () => { if (confirm('自動で整理する前の状態に戻します。そのあとに直した分も戻ります。よろしいですか？')) await undoOrganize(); };
+  $('#exportAll').onclick = () => {
+    if (!S.items.length) return toast('書き出すものがありません');
+    if (!confirm('ID・パスワードを、だれでも読める形で書き出します。移し終わったらファイルを消してください。書き出しますか？')) return;
+    const q = v => '"' + String(v ?? '').replace(/"/g, '""') + '"';
+    const isUrl = f => /^https?:\/\//i.test(f.value);
+    const pick = it => { const id = findField(it, ID_RE), pw = findField(it, PW_RE), url = it.fields.find(isUrl); return { id, pw, url, rest: it.fields.filter(f => f !== id && f !== pw && f !== url && f.value) }; };
+    // そのほかの項目は、項目名ごとに列にする（多く使われている順）
+    const count = new Map();
+    for (const it of S.items) for (const f of pick(it).rest) { const l = f.label.trim() || '項目名なし'; count.set(l, (count.get(l) || 0) + 1); }
+    const extra = [...count.keys()].sort((a, b) => count.get(b) - count.get(a));
+    const rows = [['名前', 'タグ', 'URL', 'ID', 'パスワード', ...extra, 'メモ']];
+    for (const it of [...S.items].sort((a, b) => a.title.localeCompare(b.title, 'ja'))) {
+      const p = pick(it), cols = {};
+      for (const f of p.rest) { const l = f.label.trim() || '項目名なし'; cols[l] = cols[l] ? cols[l] + ' / ' + f.value : f.value; }
+      rows.push([it.title, tagsOf(it).join(' / '), p.url?.value || '', p.id?.value || '', p.pw?.value || '', ...extra.map(l => cols[l] || ''), it.memo || '']);
+    }
+    const blob = new Blob(['\uFEFF' + rows.map(r => r.map(q).join(',')).join('\r\n')], { type: 'text/csv' });
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = `sac_key_全件_${today()}.csv`; a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    toast(`${rows.length - 1}件を書き出しました。移し終わったら CSV は消してください`);
+  };
   $('#exportChrome').onclick = () => exportPasswords('chrome');
   $('#exportSafari').onclick = () => exportPasswords('safari');
   $('#import').onclick = () => $('#importFile').click();
@@ -841,7 +901,8 @@ function renderSettings() {
     let r; try { r = await decryptBlob(blob, pw); } catch (err) { return toast('パスワードが違います'); }
     if ($('#replace').checked) {
       if (!confirm(`今の ${S.items.length}件を消して、ファイルの ${r.items.length}件に置き換えます。よろしいですか？`)) return;
-      S.items = r.items; S.deleted = r.deleted;
+      const t = now(); S.items = r.items.map(it => ({ ...it, updated: t })); S.deleted = r.deleted;
+      await persist({ noPull: true }); return nav('list', null, true);
     } else {
       const m = mergeItems(r.items, r.deleted);
       toast(`追加 ${m.added}件、更新 ${m.updated}件、削除 ${m.removed}件`);
@@ -852,8 +913,9 @@ function renderSettings() {
     const a = $('#np1').value, b = $('#np2').value;
     if (a.length < 8) return $('#perr').textContent = '8文字以上にしてください';
     if (a !== b) return $('#perr').textContent = '2つが一致しません';
+    await persist();   // 先に今のパスワードのままクラウドと合わせる
     S.salt = crypto.getRandomValues(new Uint8Array(16)); S.iter = PBKDF2_ITER;
-    S.key = await deriveKey(a, S.salt, S.iter); await persist();
+    S.key = await deriveKey(a, S.salt, S.iter); await persist({ noPull: true });
     if (S.remembered) await rememberKey(S.key);
     $('#np1').value = $('#np2').value = ''; toast('パスワードを変えました');
   };
@@ -983,7 +1045,7 @@ function renderCsv() {
           v = (v || '').trim(); if (!v || !headers[i]) return;
           const m = map[i] || 'skip';
           if (m === 'title') it.title = it.title ? it.title + ' ' + v : v;
-          else if (m === 'cat') it.category = v;
+          else if (m === 'cat') { it._tags = v.split(/\s*\/\s*/); it.category = it._tags[0]; }
           else if (m === 'memo') memos.push(v);
           else if (m === 'plain') it.fields.push({ label: headers[i], value: v, secret: false });
           else if (m === 'secret') it.fields.push({ label: headers[i], value: v, secret: true });
@@ -991,7 +1053,7 @@ function renderCsv() {
         it.memo = memos.join('\n');
         if (!it.title && !it.fields.length) continue;
         if (!it.title) it.title = '（無題）';
-        setTags(it, [it.category]); S.items.push(it); n++;
+        setTags(it, it._tags || [it.category]); delete it._tags; S.items.push(it); n++;
       }
       await persist(); S.cat = cat; toast(`${n}件 取り込みました`); nav('list', null, true);
     };
@@ -1019,6 +1081,10 @@ function renderCsv() {
   }
 }
 
+/* 思わぬエラーで画面が固まったように見えないよう、知らせて続ける */
+window.addEventListener('error', e => { console.error(e.error || e.message); toast('うまく動かなかった所があります。もう一度試してください'); });
+window.addEventListener('unhandledrejection', e => { console.error(e.reason); toast('うまく動かなかった所があります：' + cloudErrText(e.reason)); });
+
 /* ---------- 起動 ---------- */
 if (!window.isSecureContext || !crypto.subtle) {
   app.innerHTML = `<div class="card center"><h1>sac_key</h1><p class="hint">このブラウザでは暗号化機能が使えません。Safari か Chrome でファイルを直接開いてください。</p></div>`;
@@ -1035,7 +1101,7 @@ if (!window.isSecureContext || !crypto.subtle) {
     if (S.key) { await syncCloud(); await autoOrganize(); }
     applyHash();
     // 画面に戻ってきたとき（iPhone で切り替えたあと など）も合わせる
-    document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && S.key && sb && S.cloudUser) { await syncCloud(); if (S.view === 'list') render(); } });
+    document.addEventListener('visibilitychange', async () => { if (document.visibilityState === 'visible' && S.key && sb && S.cloudUser) { await syncCloud(); const ae = document.activeElement; if (S.view === 'list' && !(ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName))) render(); } });
   })();
 }
 </script>
