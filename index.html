@@ -174,42 +174,98 @@ function normalizeTag(t) {
   const hit = TAG_RULES.find(([, re]) => re.test(t)); return hit ? hit[0] : null;
 }
 const OTHER_LABEL = /^$|その他|情報|備考|詳細|メモ|補足/;
-function organizeItem(it) {
+/* 項目名の言い換え（取り込んだ表の見出しをそのまま使った、分かりにくい名前を直す） */
+const LABEL_FIX = [[/^名義[・／\/]?対象$|^名義人$|^口座名義人$/, '名義'], [/^(ID[・／\/]ユーザー名|ユーザー名|ユーザーID|ログインID)$/i, 'ID'], [/^(PW|ＰＷ|pass|password|ログインパスワード)$/i, 'パスワード'],
+  [/^(セキュリティ|セキュリティーコード|CVV|CVC|CVV2)$/i, 'セキュリティコード'], [/^(期限|有効期間|有効年月)$/, '有効期限'], [/^(暗証|暗証番号（4桁）|PIN)$/i, '暗証番号']];
+/* 値のかたちから項目名を当てる（項目名が空のときだけ） */
+const guessLabel = (v, it) => {
+  if (/^(0[1-9]|1[0-2])\s*[\/／]\s*(\d{2}|20\d{2})$/.test(v)) return '有効期限';
+  if (/^https?:\/\//i.test(v)) return 'URL';
+  if (/^[^@\s]+@[^@\s]+\.[a-z]{2,}$/i.test(v)) return 'メール';
+  if (/^0\d{1,4}-?\d{1,4}-?\d{3,4}$/.test(v)) return '電話番号';
+  return '';
+};
+/* 名前の直し：(Master) → Mastercard など。Amazon Prime Mastercard は今の名前 Amazon Mastercard に */
+function fixTitle(t) {
+  let x = String(t || '');
+  x = x.replace(/[（(]\s*(master|マスター|mastercard)\s*[)）]/ig, ' Mastercard').replace(/[（(]\s*(visa|ビザ)\s*[)）]/ig, ' VISA').replace(/[（(]\s*jcb\s*[)）]/ig, ' JCB').replace(/[（(]\s*(amex|アメックス)\s*[)）]/ig, ' AMEX');
+  x = x.replace(/amazon\s*prime\s*mastercard/i, 'Amazon Mastercard').replace(/アマゾン\s*プライム\s*(マスター|mastercard)/i, 'Amazon Mastercard');
+  return x.replace(/\s+/g, ' ').trim();
+}
+/* メモの1文を項目にする */
+const MEMO_FIELDS = [[/限度額|利用可能額|利用枠|上限/, '限度額'], [/締め|〆|支払日|支払い日|引き落とし|引落/, '締め日・支払日'], [/年会費/, '年会費']];
+function organizeItem(it, sheetNames = new Set()) {
   let changed = false, splits = 0;
+  const before = JSON.stringify([it.title, it.fields, it.memo, it.tags]);
   // 1) 1行まとめを分ける（項目名が「その他の情報」などのときだけ。半分以上に項目名が付くときだけ）
   const nf = [];
   for (const f of it.fields) {
     const parts = OTHER_LABEL.test((f.label || '').trim()) ? splitValue(f.value) : [];
-    if (parts.length > 1 && parts.filter(x => x.label).length * 2 >= parts.length) {
-      parts.forEach(x => nf.push({ label: x.label, value: x.value, secret: x.label ? (SECRET_WORDS.test(x.label) || f.secret) : f.secret }));
-      splits++; changed = true;
-    } else nf.push(f);
+    if (parts.length > 1 && parts.filter(x => x.label).length * 2 >= parts.length) { parts.forEach(x => nf.push({ label: x.label, value: x.value })); splits++; }
+    else nf.push({ label: f.label || '', value: f.value || '' });
   }
-  it.fields = nf;
-  // 2) タグを推測して足す（今のタグは消さない。具体的なタグが付いたら「その他」だけ外す）
-  // 推測に使うのは 名前・項目名・URL・メモ だけ（ID やパスワードの値に混じった英字で取り違えないように）
-  const text = [it.title, ...it.fields.map(f => f.label), ...it.fields.filter(f => /^https?:\/\//i.test(f.value)).map(f => f.value), it.memo].join(' ');
-  // 今のタグを6つのどれかに寄せ、足りなければ中身から推測。1件につき最大2つ
-  // 決まった6つ・古い14種類の名前は寄せて使う。自作の種類名（シート名など）は、中身から推測できないときだけ使う
-  const own = tagsOf(it), known = own.filter(t => CATEGORIES.includes(t) || t in OLD_TAG), custom = own.filter(t => !(CATEGORIES.includes(t) || t in OLD_TAG));
-  let tags = [...new Set(known.map(normalizeTag).filter(Boolean))].filter(t => t !== 'その他');
-  for (const [tag, re] of TAG_RULES) if (tags.length < 2 && !tags.includes(tag) && re.test(text)) tags.push(tag);
-  if (!tags.length) tags = [...new Set(custom.map(normalizeTag).filter(Boolean))].filter(t => t !== 'その他');
-  const finalTags = (tags.length ? tags : ['その他']).slice(0, 2);
-  if (finalTags.join('\n') !== tagsOf(it).join('\n') || !Array.isArray(it.tags)) { setTags(it, finalTags); changed = true; }
+  // 2) 「231／有効期限」のように、次の項目の名前が値の後ろにくっついている形を直す
+  for (let i = 0; i < nf.length; i++) {
+    const m = /^(.*?\S)\s*[／\/]\s*(有効期限|暗証番号|セキュリティコード|カード番号|口座番号|支店名?|名義|限度額|電話番号|締め日|支払日|ID|パスワード)\s*[:：]?\s*(.*)$/.exec(nf[i].value);
+    if (!m || /^https?:/i.test(nf[i].value)) continue;
+    if (m[3]) { nf.splice(i + 1, 0, { label: m[2], value: m[3] }); nf[i].value = m[1]; splits++; }
+    else if (nf[i + 1] && !nf[i + 1].label.trim()) { nf[i].value = m[1]; nf[i + 1].label = m[2]; splits++; }
+  }
+  // 3) 項目名の言い換えと、空の項目名を値のかたちから当てる
+  // カードか銀行かは、名前と、はっきりした項目名だけで見分ける（「番号（口座・カード等）」のような両方入りの名前は見ない）
+  const labels = nf.map(f => f.label.trim()).filter(l => !/口座.*カード|カード.*口座/.test(l)).join(' ');
+  const isCard = /(?<!キャッシュ)カード|card|master|visa|jcb|amex|アメックス|ダイナース/i.test(it.title) || /セキュリティコード|有効期限|カード番号/.test(labels);
+  const isBank = /銀行|信金|信用金庫|信用組合|ゆうちょ|証券/.test(it.title) || /支店|口座種別|口座番号/.test(labels);
+  for (const f of nf) {
+    let l = f.label.trim();
+    for (const [re, to] of LABEL_FIX) if (re.test(l)) { l = to; break; }
+    if (/^番号[（(].*[)）]$|^番号$/.test(l)) l = isCard && !isBank ? 'カード番号' : isBank && !isCard ? '口座番号' : l;
+    if (!l) l = guessLabel(f.value.trim(), it);
+    f.label = l;
+  }
+  // 4) メモの中の「限度額…」「…締め…支払」を項目に。シート名だけの行（例：CR・銀行関係）は消す
+  const memoKeep = [];
+  for (const line of String(it.memo || '').split(/\r?\n/)) {
+    const keep = [];
+    for (const sen of line.split(/(?<=。)/)) {
+      const t = sen.replace(/。$/, '').trim(); if (!t) continue;
+      if (sheetNames.has(t) || CATEGORIES.includes(t) || t in OLD_TAG) continue;
+      const hit = MEMO_FIELDS.find(([re]) => re.test(t));
+      if (hit && !nf.some(f => f.label === hit[1])) { nf.push({ label: hit[1], value: hit[1] === '限度額' ? t.replace(/^(限度額|利用可能額|利用枠)\s*[:：]?\s*/, '') : t }); splits++; }
+      else keep.push(sen.trim());
+    }
+    if (keep.length) memoKeep.push(keep.join(''));
+  }
+  it.fields = nf; it.memo = memoKeep.join('\n');
+  it.title = fixTitle(it.title);
+  // 5) タグ：名前から決める。カードや銀行と分かったら、それだけにする（楽天カード・Amazon Mastercard をネットサービスにしない）
+  const urls = it.fields.filter(f => /^https?:\/\//i.test(f.value)).map(f => f.value).join(' ');
+  const strong = [];
+  if (isCard) strong.push('カード・決済');
+  if (isBank && !(isCard && !/銀行|信金|ゆうちょ/.test(it.title))) strong.push('銀行・証券');
+  let tags = strong.slice();
+  if (!tags.length) for (const src of [it.title + ' ' + urls, it.fields.map(f => f.label).join(' ') + ' ' + it.memo]) {
+    for (const [tag, re] of TAG_RULES) if (tags.length < 2 && !tags.includes(tag) && re.test(src)) tags.push(tag);
+    if (tags.length) break;
+  }
+  if (!tags.length) tags = [...new Set(tagsOf(it).map(normalizeTag).filter(Boolean))].filter(t => t !== 'その他').slice(0, 2);
+  setTags(it, tags.length ? tags.slice(0, 2) : ['その他']);
+  changed = JSON.stringify([it.title, it.fields, it.memo, it.tags]) !== before;
   if (changed) it.updated = now();
   return { changed, splits };
 }
-const ORG_FLAG = 'sackey.organized.v2', ORG_BACKUP = 'sackey.backup.beforeOrganize';
+const ORG_FLAG = 'sackey.organized.v3', ORG_BACKUP = 'sackey.backup.beforeOrganize';
 async function autoOrganize(force) {
   if (!S.key) return;
   let done = false; try { done = localStorage.getItem(ORG_FLAG) === '1'; } catch (e) {}
   if (done && !force) return;
   try { const cur = localStorage.getItem(STORE_KEY); if (cur) localStorage.setItem(ORG_BACKUP, cur); } catch (e) {}
   let n = 0, sp = 0;
-  for (const it of S.items) { const r = organizeItem(it); if (r.changed) n++; sp += r.splits; }
+  // 取り込んだときのシート名（6つ以外のタグ名）は、メモに紛れていたら消す
+  const sheetNames = new Set(S.items.flatMap(tagsOf).filter(t => !CATEGORIES.includes(t)));
+  for (const it of S.items) { const r = organizeItem(it, sheetNames); if (r.changed) n++; sp += r.splits; }
   try { localStorage.setItem(ORG_FLAG, '1'); } catch (e) {}
-  if (n) { await persist(); toast(`自動で整理しました：${n}件のタグを見直し、${sp}か所を項目に分けました。設定から元に戻せます`); }
+  if (n) { await persist(); toast(`自動で整理しました：${n}件を直しました（項目の分け直し ${sp}か所）。設定から元に戻せます`); }
   else if (force) toast('整理するものはありませんでした');
 }
 async function undoOrganize() {
@@ -586,10 +642,14 @@ const findField = (it, re) => {
   const strict = re === ID_RE ? ID_STRICT : re === PW_RE ? PW_STRICT : null, lb = f => (f.label || '').trim();
   return (strict && it.fields.find(f => strict.test(lb(f)) && f.value)) || it.fields.find(f => re.test(lb(f)) && !NOT_MAIN.test(lb(f)) && f.value);
 };
+/* 自動では直せなかったもの：項目名が空の値がある */
+const needsCheck = it => it.fields.some(f => f.value && !(f.label || '').trim());
 function renderList() {
+  const nCheck = S.items.filter(needsCheck).length;
+  if (S.cat === '要確認' && !nCheck) S.cat = 'すべて';
   const q = S.q.trim().toLowerCase();
   const items = S.items
-    .filter(it => S.cat === 'すべて' || tagsOf(it).includes(S.cat))
+    .filter(it => S.cat === 'すべて' || (S.cat === '要確認' ? needsCheck(it) : tagsOf(it).includes(S.cat)))
     .filter(it => !q || (it.title + ' ' + it.memo + ' ' + tagsOf(it).join(' ') + ' ' + it.fields.map(f => f.label + ' ' + f.value).join(' ')).toLowerCase().includes(q))
     .sort((a, b) => a.title.localeCompare(b.title, 'ja'));
   app.innerHTML = `
@@ -600,6 +660,7 @@ function renderList() {
     <input type="search" id="q" placeholder="検索（名前・タグ・ID・メモ）" value="${esc(S.q)}">
     <button class="primary" id="add">追加</button>
   </div>
+  ${nCheck ? `<div class="banner"><span>${S.cat === '要確認' ? '項目名が空のものだけを表示しています。開いて「編集」から項目名を入れてください' : `項目名が空のものが ${nCheck}件あります`}</span><button class="small" id="checkBtn">${S.cat === '要確認' ? '全部に戻す' : '見る'}</button></div>` : ''}
   <div class="tabs">${['すべて', ...(S.items.length ? usedTags() : CATEGORIES)].map(c => `<button class="${c === S.cat ? 'on' : ''}" data-cat="${esc(c)}">${esc(c)}</button>`).join('')}</div>
   </div>
   <div class="list" style="padding-top:8px">
@@ -622,6 +683,7 @@ function renderList() {
   $('#q').oninput = e => { if (!e.isComposing) onQ(e); };
   $('#q').addEventListener('compositionend', onQ);
   $('#add').onclick = () => nav('edit', 'new');
+  if ($('#checkBtn')) $('#checkBtn').onclick = () => { S.cat = S.cat === '要確認' ? 'すべて' : '要確認'; render(); };
   $$('[data-cat]').forEach(b => b.onclick = () => { S.cat = b.dataset.cat; render(); });
   $$('.item').forEach(el => el.onclick = () => nav('detail', el.dataset.id));
   $$('[data-qc]').forEach(b => b.onclick = e => {
